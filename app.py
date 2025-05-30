@@ -11,7 +11,7 @@ import time
 
 # Title and Description
 st.set_page_config(page_title="Milk Delivery Optimizer", layout="wide")
-st.title("🚚 Milk Delivery Route Optimizer")
+st.title("🚚 RK - Delivery Route Optimizer")
 st.markdown("Optimize early morning deliveries (4 AM to 6:30 AM) to apartments/societies with minimum cost.")
 
 # CSV Template Download
