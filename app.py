@@ -20,9 +20,7 @@ if st.button("📅 Download CSV Template"):
         "Apartment": ["ABC Residency", "Green Heights"],
         "Latitude": [12.935, 12.938],
         "Longitude": [77.614, 77.610],
-        "Orders": [10, 20],
-        "Start Time": [0, 0],
-        "End Time": [150, 150]
+        "Orders": [10, 20]
     })
     csv = template.to_csv(index=False).encode('utf-8')
     st.download_button("Download Template", data=csv, file_name="milk_delivery_template.csv", mime='text/csv')
@@ -36,10 +34,8 @@ def geocode_address(address):
     except:
         return (None, None)
 
-# User Inputs
-num_vehicles = st.number_input("Number of Vehicles", min_value=1, value=1, step=1)
-vehicle_capacity = st.number_input("Order Capacity per Vehicle", min_value=1, value=50, step=1)
-max_orders_per_route = st.number_input("Max Orders per Route per Vehicle", min_value=1, value=50, step=1)
+# Vehicle cost input
+vehicle_cost = st.number_input("Enter Vehicle Cost per Km (₹):", min_value=1, value=12)
 
 # File Upload
 uploaded_file = st.file_uploader("Upload Delivery Data CSV", type=["csv"])
@@ -57,15 +53,12 @@ if uploaded_file:
     st.success("📍 Locations loaded and geocoded successfully.")
     st.dataframe(df)
 
-    # OR-Tools VRP with Time Windows and Capacity
+    # OR-Tools VRP setup
     def create_data_model():
         data = {
             'locations': list(zip(df["Latitude"], df["Longitude"])),
-            'num_vehicles': num_vehicles,
-            'depot': 0,
-            'demands': df["Orders"].tolist(),
-            'vehicle_capacities': [vehicle_capacity] * num_vehicles,
-            'time_windows': list(zip(df["Start Time"], df["End Time"]))
+            'num_vehicles': 1,
+            'depot': 0
         }
         return data
 
@@ -82,95 +75,70 @@ if uploaded_file:
 
     data = create_data_model()
     distance_matrix = compute_euclidean_distance_matrix(data['locations'])
-    time_matrix = distance_matrix
 
     manager = pywrapcp.RoutingIndexManager(len(data['locations']), data['num_vehicles'], data['depot'])
     routing = pywrapcp.RoutingModel(manager)
-
     def distance_callback(from_index, to_index):
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
         return int(distance_matrix[from_node][to_node] * 100000)
-
     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-    # Capacity constraints
-    def demand_callback(from_index):
-        from_node = manager.IndexToNode(from_index)
-        return data['demands'][from_node]
-    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        demand_callback_index, 0, data['vehicle_capacities'], True, 'Capacity')
+    # Add Time Windows: 4:00 AM = 0, 7:00 AM = 180 minutes
+    time_windows = [(0, 180)] * len(data['locations'])
 
-    # Time windows
-    def time_callback(from_index, to_index):
-        from_node = manager.IndexToNode(from_index)
-        to_node = manager.IndexToNode(to_index)
-        return int(time_matrix[from_node][to_node] * 100)
-    time_callback_index = routing.RegisterTransitCallback(time_callback)
-    routing.AddDimension(
-        time_callback_index, 30, 300, False, 'Time')
-    time_dimension = routing.GetDimensionOrDie('Time')
-
-    for location_idx, time_window in enumerate(data['time_windows']):
-        index = manager.NodeToIndex(location_idx)
-        time_dimension.CumulVar(index).SetRange(time_window[0], time_window[1])
-
-    # Search Parameters
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search_parameters.time_limit.seconds = 10
-
     solution = routing.SolveWithParameters(search_parameters)
 
     if solution:
-        st.subheader("📋 Optimized Delivery Routes")
-        total_cost_all = 0
-        for vehicle_id in range(data['num_vehicles']):
-            index = routing.Start(vehicle_id)
-            plan_output = []
-            route_distance = 0
-            route_orders = 0
-            while not routing.IsEnd(index):
-                node_index = manager.IndexToNode(index)
-                plan_output.append(node_index)
-                next_index = solution.Value(routing.NextVar(index))
-                route_distance += distance_matrix[node_index][manager.IndexToNode(next_index)]
-                route_orders += data['demands'][node_index]
-                index = next_index
-            plan_output.append(manager.IndexToNode(index))
+        index = routing.Start(0)
+        route = []
+        total_distance = 0
+        while not routing.IsEnd(index):
+            node_index = manager.IndexToNode(index)
+            route.append(node_index)
+            next_index = solution.Value(routing.NextVar(index))
+            total_distance += distance_matrix[node_index][manager.IndexToNode(next_index)]
+            index = next_index
+        route.append(manager.IndexToNode(index))
 
-            if route_orders > 0:
-                m = folium.Map(location=[df["Latitude"].mean(), df["Longitude"].mean()], zoom_start=13)
-                for i, stop in enumerate(plan_output):
-                    row = df.iloc[stop]
-                    folium.Marker(
-                        location=[row["Latitude"], row["Longitude"]],
-                        popup=f"{i+1}. {row['Apartment']} (ID: {row['Society ID']}, {row['Orders']} orders)",
-                        icon=folium.Icon(color='blue' if i > 0 else 'green', icon='home' if i > 0 else 'play')
-                    ).add_to(m)
-                folium.PolyLine(
-                    locations=[(df.iloc[stop]["Latitude"], df.iloc[stop]["Longitude"]) for stop in plan_output],
-                    color="red", weight=3
-                ).add_to(m)
-                st.markdown(f"### 🛻 Vehicle {vehicle_id + 1} Route")
-                st_folium(m, height=400, width=900)
+        # Map visualization
+        m = folium.Map(location=[df["Latitude"].mean(), df["Longitude"].mean()], zoom_start=13)
+        for i, stop in enumerate(route):
+            row = df.iloc[stop]
+            folium.Marker(
+                location=[row["Latitude"], row["Longitude"]],
+                popup=f"{i+1}. {row['Apartment']} (ID: {row['Society ID']}, {row['Orders']} orders)",
+                icon=folium.Icon(color='blue' if i > 0 else 'green', icon='home' if i > 0 else 'play')
+            ).add_to(m)
+        folium.PolyLine(
+            locations=[(df.iloc[stop]["Latitude"], df.iloc[stop]["Longitude"]) for stop in route],
+            color="red", weight=3
+        ).add_to(m)
+        st_folium(m, height=500, width=900)
 
-                ordered_df = df.iloc[plan_output].reset_index(drop=True)
-                ordered_df["Stop"] = range(1, len(ordered_df)+1)
-                st.dataframe(ordered_df[["Stop", "Society ID", "Apartment", "Latitude", "Longitude", "Orders"]])
+        # Route summary
+        ordered_df = df.iloc[route].reset_index(drop=True)
+        ordered_df["Stop"] = range(1, len(ordered_df)+1)
+        st.subheader("📋 Optimized Delivery Route")
+        st.dataframe(ordered_df[["Stop", "Society ID", "Apartment", "Latitude", "Longitude", "Orders"]])
 
-                total_orders = ordered_df["Orders"].sum()
-                cost_per_km = 12
-                total_km = route_distance * 111
-                total_cost = total_km * cost_per_km
-                cost_per_order = total_cost / total_orders if total_orders > 0 else 0
-                total_cost_all += total_cost
+        # Cost calculation
+        total_orders = df["Orders"].sum()
+        total_km = total_distance * 111  # rough conversion: 1 degree ≈ 111 km
+        total_cost = total_km * vehicle_cost
+        cost_per_order = total_cost / total_orders
 
-                st.markdown(f"**Distance:** {total_km:.2f} km | **Orders:** {total_orders} | **Cost:** ₹{total_cost:.2f} | ₹{cost_per_order:.2f}/order")
+        st.subheader("💰 Cost Summary")
+        st.markdown(f"- **Total distance:** {total_km:.2f} km")
+        st.markdown(f"- **Total cost:** ₹{total_cost:.2f}")
+        st.markdown(f"- **Cost per order:** ₹{cost_per_order:.2f}")
 
-        st.markdown(f"### 💰 Total Delivery Cost Across All Vehicles: ₹{total_cost_all:.2f}")
+        # Download optimized CSV
+        if st.button("📄 Download Optimized Route CSV"):
+            csv_export = ordered_df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download Route CSV", data=csv_export, file_name="optimized_milk_route.csv", mime="text/csv")
     else:
-        st.error("Optimization failed. Please check the data and constraints.")
+        st.error("Optimization failed. Please check the data.")
