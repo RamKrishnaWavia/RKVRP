@@ -2,159 +2,176 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-from ortools.constraint_solver import routing_enums_pb2
-from ortools.constraint_solver import pywrapcp
-import math
-import io
+from ortools.constraint_solver import routing_enums_pb2, pywrapcp
+from geopy.geocoders import Nominatim
 
-# Page config
-st.set_page_config(page_title="RK - Delivery Route Optimizer", layout="wide")
+# Fixed depot coordinates (Soukya Road)
+DEPOT_LAT = 13.0833   # Replace with actual Soukya Road lat
+DEPOT_LON = 77.6253   # Replace with actual Soukya Road lon
+
 st.title("RK - Delivery Route Optimizer")
-st.markdown("Optimize early morning deliveries (4 AM to 7 AM) with minimum cost. One vehicle per route, max 200 orders/vehicle. Target: Cost per order < ₹4.")
 
-# CSV Template Download
-if st.button("📄 Download CSV Template"):
-    template = pd.DataFrame({
-        "Society ID": [101, 102],
-        "Apartment": ["ABC Residency", "Green Heights"],
-        "Latitude": [12.935, 12.938],
-        "Longitude": [77.614, 77.610],
-        "Orders": [120, 100]
-    })
-    csv = template.to_csv(index=False).encode("utf-8")
-    st.download_button("Download Template", data=csv, file_name="delivery_template.csv", mime="text/csv")
+# User inputs vehicle monthly cost and max orders per vehicle (default 200)
+vehicle_monthly_cost = st.number_input("Enter monthly cost per vehicle (₹)", value=35000, min_value=1000)
+max_orders_per_vehicle = st.number_input("Enter max orders per vehicle (minimum 200)", value=200, min_value=200)
 
-# Vehicle cost input
-vehicle_monthly_cost = st.number_input("Enter Monthly Cost per Vehicle (₹)", value=35000, step=500)
+st.markdown("### Download CSV Template")
+template = pd.DataFrame({
+    "Society ID": [101, 102],
+    "Society Name": ["ABC Residency", "Green Heights"],
+    "Latitude": [12.935, 12.938],
+    "Longitude": [77.614, 77.610],
+    "Orders": [10, 20]
+})
+csv_template = template.to_csv(index=False).encode('utf-8')
+st.download_button("Download Template", data=csv_template, file_name="milk_delivery_template.csv", mime='text/csv')
 
-# File Upload
-uploaded_file = st.file_uploader("Upload Delivery Data CSV", type=["csv"])
+uploaded_file = st.file_uploader("Upload delivery data CSV", type=["csv"])
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
-    required_cols = ["Society ID", "Apartment", "Latitude", "Longitude", "Orders"]
-    if not all(col in df.columns for col in required_cols):
-        st.error("CSV must contain: Society ID, Apartment, Latitude, Longitude, Orders")
-        st.stop()
 
-    st.success("✅ Data uploaded successfully")
-    st.dataframe(df)
+    # Add depot as first row
+    depot_row = pd.DataFrame([{
+        "Society ID": 0,
+        "Society Name": "Soukya Road Depot",
+        "Latitude": DEPOT_LAT,
+        "Longitude": DEPOT_LON,
+        "Orders": 0
+    }])
+    df = pd.concat([depot_row, df], ignore_index=True)
 
-    locations = list(zip(df.Latitude, df.Longitude))
-    demands = df.Orders.tolist()
+    # Prepare data for OR-tools
+    locations = list(zip(df["Latitude"], df["Longitude"]))
+    demands = df["Orders"].tolist()
 
     def compute_euclidean_distance_matrix(locations):
         distances = {}
-        for from_counter, from_node in enumerate(locations):
-            distances[from_counter] = {}
-            for to_counter, to_node in enumerate(locations):
-                distances[from_counter][to_counter] = math.hypot(
-                    from_node[0] - to_node[0], from_node[1] - to_node[1])
+        for i, from_node in enumerate(locations):
+            distances[i] = {}
+            for j, to_node in enumerate(locations):
+                distances[i][j] = int(
+                    (((from_node[0] - to_node[0])**2 + (from_node[1] - to_node[1])**2)**0.5) * 111000
+                )  # meters approx
         return distances
 
     distance_matrix = compute_euclidean_distance_matrix(locations)
 
-    # Split into routes with max 200 orders per vehicle
-    sorted_df = df.sort_values("Orders", ascending=False).reset_index(drop=True)
-    routes = []
-    current_route = []
-    current_orders = 0
+    # Setup OR-Tools data model
+    data = {}
+    data['distance_matrix'] = distance_matrix
+    data['demands'] = demands
+    data['vehicle_capacities'] = [max_orders_per_vehicle] * len(df)  # large max, will reduce later
+    data['num_vehicles'] = len(df)  # max possible (one vehicle per location)
+    data['depot'] = 0
 
-    for i, row in sorted_df.iterrows():
-        if current_orders + row["Orders"] > 200 and current_route:
-            routes.append(current_route)
-            current_route = []
-            current_orders = 0
-        current_route.append(i)
-        current_orders += row["Orders"]
-    if current_route:
-        routes.append(current_route)
+    manager = pywrapcp.RoutingIndexManager(len(distance_matrix), data['num_vehicles'], data['depot'])
+    routing = pywrapcp.RoutingModel(manager)
 
-    total_cost = 0
-    total_orders = df["Orders"].sum()
-    all_routes_df = []
+    def distance_callback(from_index, to_index):
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return data['distance_matrix'][from_node][to_node]
 
-    for route_idx, route_indices in enumerate(routes):
-        route_df = df.loc[route_indices].reset_index(drop=True)
-        route_locs = list(zip(route_df.Latitude, route_df.Longitude))
-        route_dm = compute_euclidean_distance_matrix(route_locs)
+    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-        manager = pywrapcp.RoutingIndexManager(len(route_locs), 1, 0)
-        routing = pywrapcp.RoutingModel(manager)
+    # Add demand constraint
+    def demand_callback(from_index):
+        from_node = manager.IndexToNode(from_index)
+        return data['demands'][from_node]
 
-        def distance_callback(from_idx, to_idx):
-            from_node = manager.IndexToNode(from_idx)
-            to_node = manager.IndexToNode(to_idx)
-            return int(route_dm[from_node][to_node] * 100000)
+    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+    routing.AddDimensionWithVehicleCapacity(
+        demand_callback_index,
+        0,  # null capacity slack
+        data['vehicle_capacities'],
+        True,  # start cumul to zero
+        "Capacity"
+    )
 
-        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        solution = routing.SolveWithParameters(search_parameters)
+    # Setting first solution heuristic
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
 
-        if not solution:
-            st.error(f"Route {route_idx+1} optimization failed")
-            continue
+    solution = routing.SolveWithParameters(search_parameters)
 
-        index = routing.Start(0)
-        route_order = []
-        total_route_distance = 0
+    if solution:
+        used_vehicles = 0
+        routes = []
+        total_distance_all = 0
+        total_orders_all = sum(demands)
 
-        while not routing.IsEnd(index):
-            node_index = manager.IndexToNode(index)
-            route_order.append(node_index)
-            next_index = solution.Value(routing.NextVar(index))
-            total_route_distance += route_dm[node_index][manager.IndexToNode(next_index)]
-            index = next_index
-        route_order.append(manager.IndexToNode(index))
+        for vehicle_id in range(data['num_vehicles']):
+            index = routing.Start(vehicle_id)
+            route_orders = 0
+            if routing.IsEnd(solution.Value(routing.NextVar(index))):
+                # vehicle not used
+                continue
+            used_vehicles += 1
+            route = []
+            route_distance = 0
+            prev_index = index
+            while not routing.IsEnd(index):
+                node_index = manager.IndexToNode(index)
+                route.append(node_index)
+                next_index = solution.Value(routing.NextVar(index))
+                route_distance += routing.GetArcCostForVehicle(prev_index, next_index, vehicle_id)
+                prev_index = next_index
+                index = next_index
+            route.append(manager.IndexToNode(index))  # depot end
+            route_orders = sum(demands[n] for n in route)
+            cost = vehicle_monthly_cost  # monthly cost per vehicle for now
+            cost_per_order = cost / route_orders if route_orders > 0 else 0
 
-        m = folium.Map(location=[route_df.Latitude.mean(), route_df.Longitude.mean()], zoom_start=13)
-        cumulative_distance = 0
+            # Filter routes not satisfying order or cost constraints
+            if route_orders < max_orders_per_vehicle or cost_per_order > 4:
+                continue
 
-        for i, stop in enumerate(route_order[:-1]):
-            row = route_df.iloc[stop]
-            next_stop = route_order[i+1]
-            distance_to_next = route_dm[stop][next_stop] * 111
-            cumulative_distance += distance_to_next
-            folium.Marker(
-                location=[row.Latitude, row.Longitude],
-                popup=f"Stop {i+1}: {row['Apartment']} (Orders: {row['Orders']})\nDist to next: {distance_to_next:.2f} km",
-                icon=folium.Icon(color='blue' if i > 0 else 'green')
-            ).add_to(m)
+            total_distance_all += route_distance
+            routes.append({
+                "vehicle_id": vehicle_id + 1,
+                "route": route,
+                "orders": route_orders,
+                "distance_km": route_distance / 1000,
+                "cost": cost,
+                "cost_per_order": cost_per_order
+            })
 
-        folium.PolyLine(
-            locations=[(route_df.iloc[stop].Latitude, route_df.iloc[stop].Longitude) for stop in route_order],
-            color="red", weight=3
-        ).add_to(m)
+        if not routes:
+            st.error("No feasible routes found with the given constraints (min 200 orders and cost/order ≤ ₹4). Try adjusting parameters.")
+        else:
+            st.success(f"Optimized {len(routes)} routes with total orders: {total_orders_all}")
+            for r in routes:
+                st.subheader(f"Route for Vehicle {r['vehicle_id']}")
+                route_df = df.iloc[r['route']][["Society ID", "Society Name", "Latitude", "Longitude", "Orders"]].copy()
+                route_df["Stop Sequence"] = range(1, len(route_df) + 1)
+                st.dataframe(route_df)
 
-        st.subheader(f"🛻 Route {route_idx+1} Map")
-        st_folium(m, height=400, width=900)
+                # Map Visualization
+                m = folium.Map(location=[DEPOT_LAT, DEPOT_LON], zoom_start=12)
+                for i, stop in enumerate(r['route']):
+                    loc = (df.loc[stop, "Latitude"], df.loc[stop, "Longitude"])
+                    popup_text = f"Stop {i+1}: {df.loc[stop, 'Society Name']}<br>Orders: {df.loc[stop, 'Orders']}"
+                    folium.Marker(loc, popup=popup_text,
+                                  icon=folium.Icon(color="green" if i == 0 else "blue")).add_to(m)
+                folium.PolyLine([ (df.loc[stop, "Latitude"], df.loc[stop, "Longitude"]) for stop in r['route']],
+                                color="red", weight=3).add_to(m)
+                st_folium(m, height=400)
 
-        ordered_df = route_df.iloc[route_order].reset_index(drop=True)
-        ordered_df["Stop"] = range(1, len(ordered_df)+1)
-        all_routes_df.append(ordered_df.assign(Route=f"Route {route_idx+1}"))
+                st.markdown(f"**Route distance:** {r['distance_km']:.2f} km")
+                st.markdown(f"**Vehicle monthly cost:** ₹{r['cost']}")
+                st.markdown(f"**Cost per order:** ₹{r['cost_per_order']:.2f}")
 
-        route_cost = vehicle_monthly_cost
-        route_orders = ordered_df["Orders"].sum()
-        cost_per_order = route_cost / route_orders
-        total_cost += route_cost
+            # Download CSV with all routes flattened
+            all_routes = []
+            for r in routes:
+                route_df = df.iloc[r['route']][["Society ID", "Society Name", "Latitude", "Longitude", "Orders"]].copy()
+                route_df["Vehicle ID"] = r["vehicle_id"]
+                route_df["Stop Sequence"] = range(1, len(route_df) + 1)
+                all_routes.append(route_df)
+            all_routes_df = pd.concat(all_routes, ignore_index=True)
 
-        st.markdown(f"**Route {route_idx+1} Summary:**")
-        st.markdown(f"- Total Orders: {route_orders}")
-        st.markdown(f"- Total Distance: {total_route_distance * 111:.2f} km")
-        st.markdown(f"- Vehicle Monthly Cost: ₹{vehicle_monthly_cost}")
-        st.markdown(f"- Cost per Order: ₹{cost_per_order:.2f} {'✅' if cost_per_order <= 4 else '❌'}")
-        st.dataframe(ordered_df[["Stop", "Society ID", "Apartment", "Latitude", "Longitude", "Orders"]])
-
-    # Final Summary
-    if all_routes_df:
-        full_df = pd.concat(all_routes_df).reset_index(drop=True)
-        st.subheader("📦 Final Optimized Routes Summary")
-        st.markdown(f"- Total Vehicles Used: {len(routes)}")
-        st.markdown(f"- Total Orders: {total_orders}")
-        st.markdown(f"- Total Monthly Cost: ₹{total_cost}")
-        st.markdown(f"- Overall Cost per Order: ₹{total_cost / total_orders:.2f} {'✅' if total_cost / total_orders <= 4 else '❌'}")
-
-        # Download
-        csv_export = full_df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download Optimized Routes CSV", data=csv_export, file_name="optimized_routes.csv", mime="text/csv")
+            csv_out = all_routes_df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download Optimized Routes CSV", data=csv_out, file_name="optimized_routes.csv", mime="text/csv")
+    else:
+        st.error("No solution found. Please check input data and constraints.")
