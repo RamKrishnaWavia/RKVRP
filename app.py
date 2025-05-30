@@ -34,9 +34,6 @@ def geocode_address(address):
     except:
         return (None, None)
 
-# Vehicle cost input
-vehicle_cost = st.number_input("Enter Vehicle Cost per Km (₹):", min_value=1, value=12)
-
 # File Upload
 uploaded_file = st.file_uploader("Upload Delivery Data CSV", type=["csv"])
 if uploaded_file:
@@ -84,10 +81,6 @@ if uploaded_file:
         return int(distance_matrix[from_node][to_node] * 100000)
     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-
-    # Add Time Windows: 4:00 AM = 0, 7:00 AM = 180 minutes
-    time_windows = [(0, 180)] * len(data['locations'])
-
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     solution = routing.SolveWithParameters(search_parameters)
@@ -108,9 +101,11 @@ if uploaded_file:
         m = folium.Map(location=[df["Latitude"].mean(), df["Longitude"].mean()], zoom_start=13)
         for i, stop in enumerate(route):
             row = df.iloc[stop]
+            society_id = row.get("Society ID", "N/A")
+            orders = row.get("Orders", "N/A")
             folium.Marker(
                 location=[row["Latitude"], row["Longitude"]],
-                popup=f"{i+1}. {row['Apartment']} (ID: {row['Society ID']}, {row['Orders']} orders)",
+                popup=f"{i+1}. {row['Apartment']} (ID: {society_id}, {orders} orders)",
                 icon=folium.Icon(color='blue' if i > 0 else 'green', icon='home' if i > 0 else 'play')
             ).add_to(m)
         folium.PolyLine(
@@ -127,8 +122,9 @@ if uploaded_file:
 
         # Cost calculation
         total_orders = df["Orders"].sum()
+        cost_per_km = 12  # example fixed rate
         total_km = total_distance * 111  # rough conversion: 1 degree ≈ 111 km
-        total_cost = total_km * vehicle_cost
+        total_cost = total_km * cost_per_km
         cost_per_order = total_cost / total_orders
 
         st.subheader("💰 Cost Summary")
