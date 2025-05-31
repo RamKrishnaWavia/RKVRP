@@ -3,123 +3,154 @@ import pandas as pd
 import folium
 from streamlit_folium import st_folium
 from sklearn.cluster import KMeans
-from geopy.distance import geodesic
+from ortools.constraint_solver import routing_enums_pb2
+from ortools.constraint_solver import pywrapcp
 import numpy as np
+from geopy.distance import geodesic
 import io
 
-# Title and Page Config
 st.set_page_config(page_title="RK - Delivery Route Optimizer", layout="wide")
 st.title("RK - Delivery Route Optimizer")
-st.markdown("Optimize early morning deliveries (4 AM to 7 AM) from Soukya Road to societies, ensuring each route is under ₹4 cost per order.")
+st.markdown("Optimize your milk delivery routes from Soukya Road with minimum cost per order and efficient sequencing.")
 
-# Input Vehicle Monthly Cost
-vehicle_cost = st.number_input("Enter Monthly Cost per Vehicle (₹):", min_value=1000, max_value=100000, value=35000, step=500)
+# User Inputs
+vehicle_cost = st.number_input("Enter monthly cost per vehicle (₹)", value=35000)
 
-# CSV Template Download
-if st.button("📅 Download CSV Template"):
+# CSV Template
+if st.button("📄 Download CSV Template"):
     template = pd.DataFrame({
-        "Society ID": [101, 102],
-        "Apartment": ["ABC Residency", "Green Heights"],
-        "Latitude": [12.935, 12.938],
-        "Longitude": [77.614, 77.610],
-        "Orders": [120, 90]
+        "Society ID": [0, 1, 2],
+        "Apartment": ["Depot - Soukya Road", "ABC Residency", "Green Heights"],
+        "Latitude": [12.935, 12.938, 12.942],
+        "Longitude": [77.614, 77.610, 77.617],
+        "Orders": [0, 100, 120]  # Depot has 0 orders
     })
     csv = template.to_csv(index=False).encode('utf-8')
     st.download_button("Download Template", data=csv, file_name="milk_delivery_template.csv", mime='text/csv')
 
-# Upload CSV
+# Upload File
 uploaded_file = st.file_uploader("Upload Delivery Data CSV", type=["csv"])
+
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
-    if not {"Latitude", "Longitude", "Orders", "Society ID", "Apartment"}.issubset(df.columns):
-        st.error("CSV must contain 'Society ID', 'Apartment', 'Latitude', 'Longitude', and 'Orders' columns.")
+
+    # Validate Columns
+    required_cols = ["Society ID", "Apartment", "Latitude", "Longitude", "Orders"]
+    if not all(col in df.columns for col in required_cols):
+        st.error("Missing one or more required columns in uploaded CSV.")
         st.stop()
 
-    # Add source (Soukya Road)
-    source_latlon = (12.8910, 77.7764)  # Soukya Road
-    source = pd.DataFrame({
-        "Society ID": [0],
-        "Apartment": ["Soukya Road"],
-        "Latitude": [source_latlon[0]],
-        "Longitude": [source_latlon[1]],
-        "Orders": [0]
-    })
-    df = pd.concat([source, df], ignore_index=True)
+    depot = df.iloc[0]  # Soukya Road
+    customers = df.iloc[1:].reset_index(drop=True)
 
-    # KMeans clustering to divide into routes (200 orders per route)
-    total_orders = df["Orders"].sum()
-    num_routes = int(np.ceil(total_orders / 200))
-    kmeans = KMeans(n_clusters=num_routes, random_state=0)
-    df = df.copy()
-    df.loc[df["Society ID"] != 0, "Cluster"] = kmeans.fit_predict(df.loc[df["Society ID"] != 0, ["Latitude", "Longitude"]])
-    df["Cluster"] = df["Cluster"].fillna(-1).astype(int)
+    # KMeans Clustering (based on orders)
+    total_orders = customers["Orders"].sum()
+    num_clusters = int(np.ceil(total_orders / 200))
 
-    st.success(f"🔁 Divided into {num_routes} optimized routes")
+    coords = customers[["Latitude", "Longitude"]].values
+    kmeans = KMeans(n_clusters=num_clusters, random_state=42).fit(coords, sample_weight=customers["Orders"])
+    customers["Cluster"] = kmeans.labels_
 
-    # Process each route
-    route_summary = []
-    for route_id in sorted(df["Cluster"].unique()):
-        cluster_df = df[(df["Cluster"] == route_id) | (df["Society ID"] == 0)].reset_index(drop=True)
-        coords = list(zip(cluster_df.Latitude, cluster_df.Longitude))
+    route_outputs = []
+    full_routes_csv = []
+    vehicle_number = 1
 
-        # Simple nearest neighbor sequence
-        visited = [0]  # start from Soukya Road
-        while len(visited) < len(coords):
-            last = visited[-1]
-            remaining = list(set(range(len(coords))) - set(visited))
-            next_stop = min(remaining, key=lambda x: geodesic(coords[last], coords[x]).km)
-            visited.append(next_stop)
+    for cluster_id in range(num_clusters):
+        cluster_df = customers[customers["Cluster"] == cluster_id].copy().reset_index(drop=True)
 
-        ordered_cluster = cluster_df.iloc[visited].reset_index(drop=True)
-        ordered_cluster["Stop"] = range(1, len(ordered_cluster)+1)
+        # Insert depot at start and end
+        cluster_df = pd.concat([pd.DataFrame([depot]), cluster_df, pd.DataFrame([depot])], ignore_index=True)
 
-        # Calculate distance
-        total_km = 0
-        for i in range(len(ordered_cluster)-1):
-            loc1 = (ordered_cluster.loc[i, "Latitude"], ordered_cluster.loc[i, "Longitude"])
-            loc2 = (ordered_cluster.loc[i+1, "Latitude"], ordered_cluster.loc[i+1, "Longitude"])
-            total_km += geodesic(loc1, loc2).km
+        # Create distance matrix using geopy
+        def compute_distance_matrix(df):
+            dist = {}
+            for i in range(len(df)):
+                dist[i] = {}
+                for j in range(len(df)):
+                    if i == j:
+                        dist[i][j] = 0
+                    else:
+                        dist[i][j] = geodesic((df.iloc[i]["Latitude"], df.iloc[i]["Longitude"]),
+                                              (df.iloc[j]["Latitude"], df.iloc[j]["Longitude"])).km
+            return dist
 
-        total_orders_cluster = ordered_cluster["Orders"].sum()
-        cost_per_order = (vehicle_cost / 30) / total_orders_cluster  # per day cost
+        distance_matrix = compute_distance_matrix(cluster_df)
 
-        # Map
-        m = folium.Map(location=coords[0], zoom_start=13)
-        for i, row in ordered_cluster.iterrows():
-            folium.Marker(
-                location=[row["Latitude"], row["Longitude"]],
-                popup=f"Stop {row['Stop']}: {row['Apartment']} (ID: {row['Society ID']}, {row['Orders']} orders)",
-                icon=folium.DivIcon(html=f"<div style='font-size: 12pt'>{row['Stop']}</div>")
-            ).add_to(m)
-            if i > 0:
-                folium.PolyLine(
-                    locations=[
-                        (ordered_cluster.loc[i-1, "Latitude"], ordered_cluster.loc[i-1, "Longitude"]),
-                        (row["Latitude"], row["Longitude"])
-                    ],
-                    color="blue",
-                    tooltip=f"{geodesic((ordered_cluster.loc[i-1, 'Latitude'], ordered_cluster.loc[i-1, 'Longitude']), (row['Latitude'], row['Longitude'])).km:.2f} km"
+        manager = pywrapcp.RoutingIndexManager(len(distance_matrix), 1, 0)
+        routing = pywrapcp.RoutingModel(manager)
+
+        def distance_callback(from_index, to_index):
+            from_node = manager.IndexToNode(from_index)
+            to_node = manager.IndexToNode(to_index)
+            return int(distance_matrix[from_node][to_node] * 1000)  # meters
+
+        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+
+        solution = routing.SolveWithParameters(search_parameters)
+
+        if solution:
+            index = routing.Start(0)
+            sequence = []
+            total_distance = 0
+            while not routing.IsEnd(index):
+                sequence.append(manager.IndexToNode(index))
+                prev_index = index
+                index = solution.Value(routing.NextVar(index))
+                total_distance += distance_matrix[manager.IndexToNode(prev_index)][manager.IndexToNode(index)]
+            sequence.append(manager.IndexToNode(index))
+
+            # Route Data
+            ordered_df = cluster_df.iloc[sequence].reset_index(drop=True)
+            ordered_df["Stop"] = range(1, len(ordered_df)+1)
+            ordered_df["Vehicle"] = vehicle_number
+
+            # Map
+            m = folium.Map(location=[ordered_df["Latitude"].mean(), ordered_df["Longitude"].mean()], zoom_start=13)
+            for i in range(len(ordered_df)-1):
+                row = ordered_df.iloc[i]
+                next_row = ordered_df.iloc[i+1]
+                folium.Marker(
+                    location=[row["Latitude"], row["Longitude"]],
+                    popup=f"{row['Stop']}. {row['Apartment']} (ID: {row['Society ID']}, {row['Orders']} orders)",
+                    icon=folium.Icon(color='blue' if i > 0 else 'green', icon='home')
                 ).add_to(m)
-        st.subheader(f"🗺 Route #{route_id+1}")
-        st_folium(m, height=450, width=800)
+                folium.PolyLine([
+                    (row["Latitude"], row["Longitude"]),
+                    (next_row["Latitude"], next_row["Longitude"])
+                ], color='red', weight=3, tooltip=f"{distance_matrix[sequence[i]][sequence[i+1]]:.2f} km").add_to(m)
+            st.subheader(f"🛣️ Route {vehicle_number} (Vehicle #{vehicle_number})")
+            st_folium(m, height=500, width=900)
 
-        # Route Summary
-        st.markdown(f"**Total Distance:** {total_km:.2f} km")
-        st.markdown(f"**Total Orders:** {int(total_orders_cluster)}")
-        st.markdown(f"**Cost per Order:** ₹{cost_per_order:.2f} (Target < ₹4)")
-        route_summary.append({
-            "Route ID": route_id + 1,
-            "Total Orders": int(total_orders_cluster),
-            "Total Distance (km)": round(total_km, 2),
-            "Cost per Order (₹)": round(cost_per_order, 2)
-        })
+            # Costing
+            total_orders = ordered_df["Orders"].sum()
+            cost_per_order = vehicle_cost / total_orders if total_orders else 0
 
-        # CSV download for this route
-        csv_data = ordered_cluster[["Stop", "Society ID", "Apartment", "Latitude", "Longitude", "Orders"]]
-        csv_file = csv_data.to_csv(index=False).encode('utf-8')
-        st.download_button(f"📄 Download Route #{route_id+1} CSV", data=csv_file, file_name=f"route_{route_id+1}.csv", mime='text/csv')
+            st.markdown(f"**Total Distance:** {total_distance:.2f} km")
+            st.markdown(f"**Total Orders:** {total_orders}")
+            st.markdown(f"**Cost per Order:** ₹{cost_per_order:.2f}")
 
-    # Overall Summary
-    if route_summary:
-        st.subheader("📊 Route Summary")
-        st.dataframe(pd.DataFrame(route_summary))
+            st.dataframe(ordered_df[["Stop", "Society ID", "Apartment", "Latitude", "Longitude", "Orders"]])
+
+            route_outputs.append({
+                "Route": vehicle_number,
+                "Orders": total_orders,
+                "Distance (km)": round(total_distance, 2),
+                "Cost per Order (₹)": round(cost_per_order, 2)
+            })
+
+            full_routes_csv.append(ordered_df)
+            vehicle_number += 1
+
+    # Route Summary
+    st.subheader("📦 Route Summary")
+    route_summary = pd.DataFrame(route_outputs)
+    st.dataframe(route_summary)
+
+    # Download Final Optimized Routes
+    final_df = pd.concat(full_routes_csv, ignore_index=True)
+    csv_final = final_df.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Download All Optimized Routes CSV", data=csv_final, file_name="optimized_routes.csv", mime="text/csv")
