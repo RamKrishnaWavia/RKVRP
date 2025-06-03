@@ -1,187 +1,178 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.cluster import DBSCAN
-from haversine import haversine, Unit
-from ortools.constraint_solver import pywrapcp, routing_enums_pb2
-import folium
-from streamlit_folium import st_folium
-
-st.set_page_config(layout="wide")
+from math import radians, cos, sin, asin, sqrt
+from ortools.constraint_solver import routing_enums_pb2
+from ortools.constraint_solver import pywrapcp
 
 # Constants
-VEHICLE_CAPACITY = 200  # orders per vehicle max capacity
-VEHICLE_MONTHLY_COST = 35000  # ₹
-DELIVERY_DAYS_PER_MONTH = 30
-MAX_GREEN_CLUSTER_RADIUS_KM = 2
+AVERAGE_SPEED_KMPH = 25  # Average speed in gated societies
+VEHICLE_CAPACITY = 20
+TIME_WINDOW_START = 3.5 * 60 * 60  # 3:30 AM in seconds from midnight
+TIME_WINDOW_END = 7 * 60 * 60      # 7:00 AM in seconds
 
-def haversine_distance_matrix(locations):
+# Haversine distance in km
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371  # Earth radius km
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    return R * c
+
+def create_distance_time_matrix(locations):
     size = len(locations)
-    dist_matrix = [[0]*size for _ in range(size)]
+    dist_matrix = np.zeros((size, size))
+    time_matrix = np.zeros((size, size))
     for i in range(size):
         for j in range(size):
             if i == j:
                 dist_matrix[i][j] = 0
+                time_matrix[i][j] = 0
             else:
-                dist_matrix[i][j] = int(haversine(locations[i], locations[j], unit=Unit.METERS))
-    return dist_matrix
+                dist = haversine(locations[i][0], locations[i][1], locations[j][0], locations[j][1])
+                dist_matrix[i][j] = dist
+                # time in seconds
+                time_matrix[i][j] = (dist / AVERAGE_SPEED_KMPH) * 3600
+    return dist_matrix, time_matrix
 
-def optimize_route(locations):
-    tsp_size = len(locations)
-    if tsp_size <= 1:
-        return list(range(tsp_size)), 0.0
-
-    dist_matrix = haversine_distance_matrix(locations)
-    manager = pywrapcp.RoutingIndexManager(tsp_size, 1, 0)
-    routing = pywrapcp.RoutingModel(manager)
-
-    def distance_callback(from_index, to_index):
-        from_node = manager.IndexToNode(from_index)
-        to_node = manager.IndexToNode(to_index)
-        return dist_matrix[from_node][to_node]
-
-    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-
-    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-
-    solution = routing.SolveWithParameters(search_parameters)
-    if not solution:
-        return None, 0.0
-
-    index = routing.Start(0)
-    route = []
-    route_distance = 0
-    while not routing.IsEnd(index):
+def print_solution(manager, routing, solution, orders, vehicle_count):
+    output = []
+    total_distance = 0
+    total_load = 0
+    for vehicle_id in range(vehicle_count):
+        index = routing.Start(vehicle_id)
+        route_dist = 0
+        route_load = 0
+        route = []
+        while not routing.IsEnd(index):
+            node_index = manager.IndexToNode(index)
+            route.append(node_index)
+            route_load += orders[node_index]
+            previous_index = index
+            index = solution.Value(routing.NextVar(index))
+            route_dist += routing.GetArcCostForVehicle(previous_index, index, vehicle_id)
+        # Add depot at end
         route.append(manager.IndexToNode(index))
-        previous_index = index
-        index = solution.Value(routing.NextVar(index))
-        route_distance += routing.GetArcCostForVehicle(previous_index, index, 0)
-    route.append(manager.IndexToNode(index))
-
-    return route, route_distance / 1000  # meters to km
-
-def cluster_data(df):
-    # Convert lat-lon to radians for haversine DBSCAN
-    coords = np.radians(df[['Latitude', 'Longitude']])
-    # DBSCAN eps in radians (2 km for green cluster)
-    eps_rad = MAX_GREEN_CLUSTER_RADIUS_KM / 6371.0088  
-    db = DBSCAN(eps=eps_rad, min_samples=1, algorithm='ball_tree', metric='haversine').fit(coords)
-
-    df['DBSCAN_Cluster'] = db.labels_
-    clusters = []
-
-    # For each DBSCAN cluster, check total orders to separate green vs blue
-    for cluster_id in sorted(df['DBSCAN_Cluster'].unique()):
-        cluster_df = df[df['DBSCAN_Cluster'] == cluster_id]
-        total_orders = cluster_df['Orders'].sum()
-        # Green cluster: total orders <= VEHICLE_CAPACITY and radius <= 2km
-        center_lat = cluster_df['Latitude'].mean()
-        center_lon = cluster_df['Longitude'].mean()
-
-        max_dist_km = cluster_df.apply(
-            lambda row: haversine((center_lat, center_lon), (row['Latitude'], row['Longitude'])), axis=1).max()
-
-        if total_orders <= VEHICLE_CAPACITY and max_dist_km <= MAX_GREEN_CLUSTER_RADIUS_KM:
-            cluster_type = 'Green'
-        else:
-            cluster_type = 'Blue'
-        
-        clusters.append({
-            'cluster_id': cluster_id,
-            'type': cluster_type,
-            'data': cluster_df,
-            'total_orders': total_orders,
-            'center': (center_lat, center_lon),
-            'max_dist_km': max_dist_km
+        total_distance += route_dist
+        total_load += route_load
+        output.append({
+            "vehicle_id": vehicle_id + 1,
+            "route": route,
+            "orders_delivered": route_load,
+            "distance_km": route_dist / 1000.0,  # cost scaled, we'll adjust below
         })
-    return clusters
+    return output
 
 def main():
-    st.title("Optimized Multi-Cluster Route Planner (Green & Blue Clusters)")
+    st.title("Milk Delivery Route Optimizer")
 
-    uploaded_file = st.file_uploader("Upload CSV with columns: Society ID, Society Name, City, Drop Point, Latitude, Longitude, Orders", type="csv")
+    st.markdown("""
+    Upload CSV with columns: `latitude`, `longitude`, `orders`
+    - Depot location will be added manually in the app
+    - Vehicle capacity fixed at 20 orders
+    - Delivery window: 3:30 AM to 7:00 AM
+    """)
+
+    uploaded_file = st.file_uploader("Upload Delivery Points CSV", type=["csv"])
+    
+    depot_lat = st.number_input("Depot Latitude", value=12.9716)  # Default Bangalore center
+    depot_lon = st.number_input("Depot Longitude", value=77.5946)
 
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
-        required_cols = ['Society ID', 'Society Name', 'City', 'Drop Point', 'Latitude', 'Longitude', 'Orders']
-        if not all(col in df.columns for col in required_cols):
-            st.error(f"CSV must contain these columns: {required_cols}")
+        st.dataframe(df.head())
+
+        # Validate columns
+        if not {'latitude', 'longitude', 'orders'}.issubset(df.columns):
+            st.error("CSV must contain 'latitude', 'longitude' and 'orders' columns")
             return
 
-        # Validate Orders column numeric & non-null
-        df['Orders'] = pd.to_numeric(df['Orders'], errors='coerce')
-        invalid_orders = df[df['Orders'].isna()]
-        if not invalid_orders.empty:
-            st.warning("Some rows have invalid or missing 'Orders'. Highlighting:")
-            st.dataframe(invalid_orders.style.apply(lambda x: ['background-color: pink']*len(x), axis=1))
-            return
+        # Prepare locations list - depot at index 0
+        locations = [(depot_lat, depot_lon)] + list(zip(df['latitude'], df['longitude']))
+        orders = [0] + df['orders'].tolist()  # depot has zero orders
 
-        clusters = cluster_data(df)
+        # Create distance and time matrix
+        dist_matrix_km, time_matrix_sec = create_distance_time_matrix(locations)
+        
+        # OR-Tools expects integer cost matrix, scale by 1000 to convert to meters and int
+        dist_matrix = (dist_matrix_km * 1000).astype(int)
+        time_matrix = time_matrix_sec.astype(int)
 
-        st.markdown(f"### Total Clusters Found: {len(clusters)}")
-        total_orders_all = df['Orders'].sum()
-        st.markdown(f"### Total Orders: {total_orders_all}")
+        # Create routing index manager
+        vehicle_count = (sum(orders) // VEHICLE_CAPACITY) + 1
+        manager = pywrapcp.RoutingIndexManager(len(dist_matrix), vehicle_count, 0)
+        routing = pywrapcp.RoutingModel(manager)
 
-        overall_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=11)
-        cluster_results = []
+        # Distance callback
+        def distance_callback(from_index, to_index):
+            from_node = manager.IndexToNode(from_index)
+            to_node = manager.IndexToNode(to_index)
+            return dist_matrix[from_node][to_node]
 
-        for c in clusters:
-            st.markdown(f"---\n### Cluster {c['cluster_id']} ({c['type']})")
-            st.markdown(f"- Total Orders: {c['total_orders']}")
-            st.markdown(f"- Max Distance from Center: {c['max_dist_km']:.2f} km")
+        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-            cluster_df = c['data'].reset_index(drop=True)
+        # Add Capacity constraint
+        def demand_callback(from_index):
+            from_node = manager.IndexToNode(from_index)
+            return orders[from_node]
 
-            locs = cluster_df[['Latitude', 'Longitude']].values.tolist()
-            route, dist_km = optimize_route(locs)
-            if route is None:
-                st.warning("Route optimization failed for this cluster.")
-                continue
+        demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+        routing.AddDimensionWithVehicleCapacity(
+            demand_callback_index,
+            0,  # null capacity slack
+            [VEHICLE_CAPACITY] * vehicle_count,
+            True,  # start cumul to zero
+            'Capacity'
+        )
 
-            cpo = (VEHICLE_MONTHLY_COST / DELIVERY_DAYS_PER_MONTH) / c['total_orders'] if c['total_orders'] > 0 else 0
+        # Add Time Window constraint
+        def time_callback(from_index, to_index):
+            from_node = manager.IndexToNode(from_index)
+            to_node = manager.IndexToNode(to_index)
+            return time_matrix[from_node][to_node]
 
-            st.markdown(f"- Optimized Route Distance: {dist_km:.2f} km")
-            st.markdown(f"- Cost Per Order (CPO): ₹{cpo:.2f}")
+        time_callback_index = routing.RegisterTransitCallback(time_callback)
+        routing.AddDimension(
+            time_callback_index,
+            30 * 60,  # allow 30 mins waiting slack
+            TIME_WINDOW_END - TIME_WINDOW_START,  # max time per vehicle
+            False,
+            'Time'
+        )
+        time_dimension = routing.GetDimensionOrDie('Time')
 
-            # Show route sequence
-            route_ordered = cluster_df.iloc[route]
-            st.dataframe(route_ordered[['Society ID', 'Society Name', 'Orders', 'Latitude', 'Longitude']])
+        # Add time window for depot
+        time_dimension.CumulVar(routing.Start(0)).SetRange(TIME_WINDOW_START, TIME_WINDOW_END)
+        time_dimension.CumulVar(routing.End(0)).SetRange(TIME_WINDOW_START, TIME_WINDOW_END)
 
-            # Map cluster with route lines
-            m = folium.Map(location=c['center'], zoom_start=13)
-            folium.Marker(location=c['center'], tooltip=f"Cluster {c['cluster_id']} Center").add_to(m)
+        # Add time windows for delivery locations
+        for node in range(1, len(locations)):
+            time_dimension.CumulVar(manager.NodeToIndex(node)).SetRange(TIME_WINDOW_START, TIME_WINDOW_END)
 
-            # Draw points
-            for idx, row in cluster_df.iterrows():
-                folium.CircleMarker(
-                    location=(row['Latitude'], row['Longitude']),
-                    radius=5,
-                    tooltip=f"{row['Society Name']} ({row['Orders']} orders)",
-                    color='green' if c['type'] == 'Green' else 'blue',
-                    fill=True,
-                    fill_opacity=0.7,
-                ).add_to(m)
+        # Setting first solution heuristic
+        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+        search_parameters.first_solution_strategy = (
+            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
 
-            # Draw route lines
-            route_points = [(cluster_df.iloc[i]['Latitude'], cluster_df.iloc[i]['Longitude']) for i in route]
-            folium.PolyLine(route_points, color='red', weight=3, opacity=0.8).add_to(m)
+        # Solve the problem
+        solution = routing.SolveWithParameters(search_parameters)
 
-            st_folium(m, width=700, height=450)
+        if solution:
+            # Output routes
+            st.success(f"Solution found with {vehicle_count} vehicles")
+            routes = print_solution(manager, routing, solution, orders, vehicle_count)
+            for r in routes:
+                st.markdown(f"**Vehicle {r['vehicle_id']} route:**")
+                route_str = " -> ".join(str(node) for node in r['route'])
+                st.write(route_str)
+                st.write(f"Orders Delivered: {r['orders_delivered']}")
+                st.write(f"Route Distance (approx): {r['distance_km']:.2f} km")
+                st.write("---")
+        else:
+            st.error("No solution found.")
 
-            cluster_results.append({
-                'cluster_id': c['cluster_id'],
-                'type': c['type'],
-                'total_orders': c['total_orders'],
-                'route_distance_km': dist_km,
-                'cost_per_order': cpo,
-            })
-
-        # Summary table
-        summary_df = pd.DataFrame(cluster_results)
-        st.markdown("### Cluster Summary")
-        st.dataframe(summary_df)
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
