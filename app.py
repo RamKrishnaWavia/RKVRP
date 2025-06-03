@@ -99,7 +99,7 @@ if uploaded_file:
                 cluster_df = df[df['Cluster ID'] == cluster_id].reset_index(drop=True)
                 locations = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
                 route, dist_km = optimize_route(locations)
-                cost = 35000 / max(cluster_df['Orders'].sum(), 1)
+                cost = 1200 / max(cluster_df['Orders'].sum(), 1)
                 total_cost += cost
                 all_routes.append({
                     "cluster": cluster_id,
