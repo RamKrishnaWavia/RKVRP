@@ -74,11 +74,7 @@ def create_distance_matrix(locations):
 
 def optimize_route(df_cluster):
     # Add depot as first point for routing
-    solution = routing.SolveWithParameters(search_parameters)
-    if solution is None:
-    st.error("❌ No feasible solution found. Please adjust vehicle capacity, number of orders, or time windows.")
-    return [], 0
-           
+            
     depot = DEPOT_COORDS
     locations = [depot] + list(zip(df_cluster['Latitude'], df_cluster['Longitude']))
     demands = [0] + df_cluster['Orders'].tolist()
