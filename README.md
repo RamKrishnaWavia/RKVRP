@@ -1,18 +1,26 @@
-
 # Milk Delivery Route Optimizer
 
-This is a Streamlit web app to optimize early morning milk subscription deliveries to apartments/societies.
+This Streamlit app helps optimize last-mile milk delivery routes using KMeans clustering and Google OR-Tools.
 
 ## Features
-- Upload or download delivery data as CSV
-- Auto-geocode apartment names to lat/lon
-- Optimize last-mile delivery route using Google OR-Tools
-- Visualize the route on a map
-- Download optimized delivery route as CSV
-- Cost summary for total and per-order delivery
 
-## How to Run (on Streamlit Cloud)
-1. Fork or clone this repo to your GitHub
-2. Visit https://streamlit.io/cloud and sign in with GitHub
-3. Click “New app”, select this repo, and enter `app.py` as the main file
-4. Click “Deploy”
+- Accepts CSV file with delivery orders and coordinates
+- Automatically clusters orders based on vehicle capacity
+- Uses OR-Tools for optimal routing within each cluster
+- Calculates cost per order
+- Visualizes routes on a map
+- Allows downloading the optimized summary
+
+## Deployment
+
+Deploy on [Streamlit Cloud](https://streamlit.io/cloud) with:
+
+- `app.py` as main script
+- `requirements.txt` for dependencies
+
+## Input CSV Format
+
+| Society ID | Society Name | City     | Drop Point   | Latitude | Longitude | Orders |
+|------------|--------------|----------|--------------|----------|-----------|--------|
+| S1         | Heaven Apt   | Bangalore| Soukya Road  | 12.9456  | 77.7501   | 120    |
+
