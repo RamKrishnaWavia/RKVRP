@@ -1,8 +1,9 @@
 
 streamlit
 pandas
-ortools
+numpy
+scikit-learn
 folium
 streamlit-folium
+ortools
 geopy
-scikit-learn
