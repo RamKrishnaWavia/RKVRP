@@ -1,201 +1,242 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.cluster import KMeans
 import folium
 from streamlit_folium import st_folium
+from sklearn.cluster import KMeans
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+from geopy.geocoders import Nominatim
 
-st.set_page_config(page_title="RK Delivery Route Optimizer", layout="wide")
-st.title("RK Delivery Route Optimizer")
-st.markdown(
-    "Upload delivery points CSV (Society ID, Society Name, City, Drop Point, Latitude, Longitude, Orders). "
-    "Optimize routes ≤200 orders/vehicle, with depot start/end, clustering, OR-Tools route sequencing, "
-    "cost per order calculation, interactive map with filters, and CSV download."
-)
+st.set_page_config(page_title="RK - Delivery Route Optimizer", layout="wide")
 
-DEPOT = {"Name": "Soukya Road Depot", "Latitude": 13.0426, "Longitude": 77.6611}  
-MAX_ORDERS = 200
-DEFAULT_VEHICLE_COST = 35000
+st.title("RK - Delivery Route Optimizer")
+st.markdown("Optimize early morning deliveries (4 AM to 7 AM) with cost-effective routes.\n"
+            "Max 200 orders per vehicle per route. Depot: Soukya Road.")
 
-# Upload CSV
-uploaded_file = st.sidebar.file_uploader(
-    "Upload CSV with columns: Society ID, Society Name, City, Drop Point, Latitude, Longitude, Orders", type=["csv"]
-)
-
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    required_cols = ["Society ID", "Society Name", "City", "Drop Point", "Latitude", "Longitude", "Orders"]
-    if not all(col in df.columns for col in required_cols):
-        st.error(f"Missing required columns: {required_cols}")
-        st.stop()
-    if df[["Latitude", "Longitude", "Orders"]].isnull().any().any():
-        st.error("Latitude, Longitude and Orders must not have missing values.")
-        st.stop()
-
-    vehicle_cost = st.sidebar.number_input("Vehicle Monthly Cost (₹)", min_value=0, value=DEFAULT_VEHICLE_COST, step=1000)
-
-    total_orders = df["Orders"].sum()
-    num_clusters = max(1, int(np.ceil(total_orders / MAX_ORDERS)))
-    if len(df) < num_clusters:
-        num_clusters = len(df)
-
-    coords = df[["Latitude", "Longitude"]].values
-    kmeans = KMeans(n_clusters=num_clusters, random_state=42).fit(coords)
-    df["Cluster ID"] = kmeans.labels_
-
-    depot_df = pd.DataFrame(
-        {
-            "Society ID": ["DEPOT"],
-            "Society Name": [DEPOT["Name"]],
-            "City": ["Depot"],
-            "Drop Point": ["Depot"],
-            "Latitude": [DEPOT["Latitude"]],
-            "Longitude": [DEPOT["Longitude"]],
-            "Orders": [0],
-            "Cluster ID": [-1],
-        }
+# CSV Template Download
+if st.button("📥 Download Sample Input CSV Template"):
+    sample_data = pd.DataFrame({
+        "Society ID": [101, 102, 103],
+        "Society Name": ["ABC Residency", "Green Heights", "Sunshine Apartments"],
+        "City": ["Bangalore", "Bangalore", "Chennai"],
+        "Drop Point": ["Drop1", "Drop1", "Drop2"],
+        "Latitude": [12.935, 12.938, 13.082],
+        "Longitude": [77.614, 77.610, 80.270],
+        "Orders": [15, 20, 30]
+    })
+    csv_bytes = sample_data.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download Template CSV",
+        data=csv_bytes,
+        file_name="milk_delivery_input_template.csv",
+        mime="text/csv"
     )
 
-    df_all = pd.concat([df, depot_df], ignore_index=True)
+uploaded_file = st.file_uploader("Upload Delivery Data CSV", type=["csv"])
 
-    def compute_distance_matrix(locations):
-        n = len(locations)
-        dist_matrix = np.zeros((n, n))
-        for i in range(n):
-            for j in range(n):
-                if i != j:
-                    dist_matrix[i][j] = np.linalg.norm(locations[i] - locations[j])
-        return dist_matrix
+# Input vehicle monthly cost
+vehicle_monthly_cost = st.number_input("Enter Vehicle Monthly Cost (₹)", min_value=1000, value=35000, step=500)
 
-    def solve_tsp(dist_matrix):
-        n = len(dist_matrix)
-        manager = pywrapcp.RoutingIndexManager(n, 1, 0)
-        routing = pywrapcp.RoutingModel(manager)
-        def distance_callback(from_index, to_index):
-            from_node = manager.IndexToNode(from_index)
-            to_node = manager.IndexToNode(to_index)
-            return int(dist_matrix[from_node][to_node] * 1e6)
-        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-        search_params = pywrapcp.DefaultRoutingSearchParameters()
-        search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        search_params.time_limit.seconds = 10
-        solution = routing.SolveWithParameters(search_params)
-        if solution:
-            index = routing.Start(0)
-            route = []
-            while not routing.IsEnd(index):
-                route.append(manager.IndexToNode(index))
-                index = solution.Value(routing.NextVar(index))
-            route.append(manager.IndexToNode(index))
-            return route
-        else:
-            return None
+MAX_ORDERS_PER_VEHICLE = 200
+DEPOT_NAME = "Soukya Road"
+DEPOT_COORDS = (12.9554, 77.6479)  # Approx lat/lon for Soukya Road; adjust if needed
 
-    optimized_routes = []
-    cluster_summaries = []
+def validate_input(df):
+    required_cols = ['Society ID', 'Society Name', 'City', 'Drop Point', 'Latitude', 'Longitude', 'Orders']
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        st.error(f"Missing required columns: {missing}")
+        return False
+    return True
 
-    for cluster_id in df["Cluster ID"].unique():
-        cluster_data = df[df["Cluster ID"] == cluster_id].copy()
-        cluster_orders = cluster_data["Orders"].sum()
-        if cluster_orders == 0:
-            continue
-        cluster_locations = cluster_data[["Latitude", "Longitude"]].values
-        depot_location = np.array([[DEPOT["Latitude"], DEPOT["Longitude"]]])
-        locations = np.vstack([depot_location, cluster_locations])
-        dist_matrix = compute_distance_matrix(locations)
-        route = solve_tsp(dist_matrix)
-        if route is None:
-            st.error(f"Could not solve TSP for cluster {cluster_id}")
-            continue
-        cum_distance = 0
-        for i in range(len(route) - 1):
-            cum_distance += dist_matrix[route[i]][route[i+1]] * 111  # Approx km
-        stop_order = []
-        for idx, loc_idx in enumerate(route[1:-1], start=1):
-            row = cluster_data.iloc[loc_idx - 1]
-            stop_order.append({
-                "Cluster ID": cluster_id,
-                "Stop Sequence": idx,
-                "Society ID": row["Society ID"],
-                "Society Name": row["Society Name"],
-                "City": row["City"],
-                "Drop Point": row["Drop Point"],
-                "Latitude": row["Latitude"],
-                "Longitude": row["Longitude"],
-                "Orders": row["Orders"],
-            })
-        cost_per_order = min(vehicle_cost / MAX_ORDERS, vehicle_cost / cluster_orders if cluster_orders else vehicle_cost)
-        cluster_summaries.append({
-            "Cluster ID": cluster_id,
-            "Total Orders": cluster_orders,
-            "Total Distance (km)": round(cum_distance, 2),
-            "Cost per Order (₹)": round(cost_per_order, 2),
-            "Number of Stops": len(cluster_data),
-        })
-        optimized_routes.extend(stop_order)
+def cluster_data(df):
+    # Cluster by KMeans based on max orders per vehicle
+    coords = df[['Latitude', 'Longitude']].to_numpy()
+    total_orders = df['Orders'].sum()
+    num_clusters = max(1, int(np.ceil(total_orders / MAX_ORDERS_PER_VEHICLE)))
+    if len(df) < num_clusters:
+        num_clusters = len(df)  # Cannot have more clusters than points
+    kmeans = KMeans(n_clusters=num_clusters, random_state=42).fit(coords)
+    df['Cluster ID'] = kmeans.labels_
+    return df, num_clusters
 
-    if not optimized_routes:
-        st.warning("No routes optimized. Please check data.")
-        st.stop()
+def create_distance_matrix(locations):
+    size = len(locations)
+    dist_matrix = {}
+    for i in range(size):
+        dist_matrix[i] = {}
+        for j in range(size):
+            if i == j:
+                dist_matrix[i][j] = 0
+            else:
+                dist_matrix[i][j] = int(((locations[i][0] - locations[j][0]) ** 2 + (locations[i][1] - locations[j][1]) ** 2) ** 0.5 * 100000)
+    return dist_matrix
 
-    df_routes = pd.DataFrame(optimized_routes)
-    df_summary = pd.DataFrame(cluster_summaries)
+def optimize_route(df_cluster):
+    # Add depot as first point for routing
+    depot = DEPOT_COORDS
+    locations = [depot] + list(zip(df_cluster['Latitude'], df_cluster['Longitude']))
+    demands = [0] + df_cluster['Orders'].tolist()
 
-    st.sidebar.header("Filters")
-    city_filter = st.sidebar.multiselect("City", options=df_routes["City"].unique())
-    society_filter = st.sidebar.multiselect("Society Name", options=df_routes["Society Name"].unique())
-    drop_filter = st.sidebar.multiselect("Drop Point", options=df_routes["Drop Point"].unique())
+    # Setup OR Tools data model
+    data = {}
+    data['distance_matrix'] = create_distance_matrix(locations)
+    data['demands'] = demands
+    data['vehicle_capacities'] = [MAX_ORDERS_PER_VEHICLE]
+    data['num_vehicles'] = 1
+    data['depot'] = 0
 
-    df_filtered = df_routes
-    if city_filter:
-        df_filtered = df_filtered[df_filtered["City"].isin(city_filter)]
-    if society_filter:
-        df_filtered = df_filtered[df_filtered["Society Name"].isin(society_filter)]
-    if drop_filter:
-        df_filtered = df_filtered[df_filtered["Drop Point"].isin(drop_filter)]
+    manager = pywrapcp.RoutingIndexManager(len(data['distance_matrix']), data['num_vehicles'], data['depot'])
+    routing = pywrapcp.RoutingModel(manager)
 
-    st.subheader("Route Summary")
-    st.dataframe(df_summary)
+    def demand_callback(from_index):
+        node = manager.IndexToNode(from_index)
+        return data['demands'][node]
 
-    st.subheader("Optimized Routes Map")
-    m = folium.Map(location=[DEPOT["Latitude"], DEPOT["Longitude"]], zoom_start=10)
-    folium.Marker([DEPOT["Latitude"], DEPOT["Longitude"]],
-                  popup=f"<b>{DEPOT['Name']}</b><br>Depot",
-                  icon=folium.Icon(color="red", icon="home")).add_to(m)
+    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+    routing.AddDimensionWithVehicleCapacity(
+        demand_callback_index,
+        0,  # null capacity slack
+        data['vehicle_capacities'],  # vehicle maximum capacities
+        True,  # start cumul to zero
+        'Capacity'
+    )
 
-    for cid, group in df_filtered.groupby("Cluster ID"):
-        points = [(DEPOT["Latitude"], DEPOT["Longitude"])]
-        for _, row in group.iterrows():
+    def distance_callback(from_index, to_index):
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return data['distance_matrix'][from_node][to_node]
+
+    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+
+    solution = routing.SolveWithParameters(search_parameters)
+
+    if solution:
+        route = []
+        index = routing.Start(0)
+        route_distance = 0
+        while not routing.IsEnd(index):
+            node_index = manager.IndexToNode(index)
+            route.append(node_index)
+            previous_index = index
+            index = solution.Value(routing.NextVar(index))
+            route_distance += routing.GetArcCostForVehicle(previous_index, index, 0)
+        route.append(manager.IndexToNode(index))  # end point (depot)
+        return route, route_distance / 100000  # convert back approx
+    else:
+        return None, None
+
+def build_map_and_show(df, clusters_routes, clusters_distances, clusters_cost_per_order):
+    m = folium.Map(location=DEPOT_COORDS, zoom_start=10)
+    # Add depot marker
+    folium.Marker(
+        location=DEPOT_COORDS,
+        popup=f"Depot: {DEPOT_NAME}",
+        icon=folium.Icon(color='red', icon='home')
+    ).add_to(m)
+
+    for cluster_id, route in clusters_routes.items():
+        cluster_df = df[df['Cluster ID'] == cluster_id].reset_index(drop=True)
+        route_coords = [DEPOT_COORDS] + list(zip(cluster_df['Latitude'], cluster_df['Longitude'])) + [DEPOT_COORDS]
+        # Add markers with sequence and popup info
+        for idx, point_idx in enumerate(route[1:-1], start=1):
+            row = cluster_df.iloc[point_idx - 1]  # route includes depot as 0th, so offset by -1
+            popup_text = (f"Stop {idx}: {row['Society Name']} (ID: {row['Society ID']})<br>"
+                          f"City: {row['City']}<br>"
+                          f"Drop Point: {row['Drop Point']}<br>"
+                          f"Orders: {row['Orders']}<br>"
+                          f"Cluster: {cluster_id}<br>"
+                          f"CPO: ₹{clusters_cost_per_order[cluster_id]:.2f}")
             folium.Marker(
-                location=[row["Latitude"], row["Longitude"]],
-                popup=(f"<b>Stop Seq:</b> {row['Stop Sequence']}<br>"
-                       f"<b>Society:</b> {row['Society Name']}<br>"
-                       f"<b>City:</b> {row['City']}<br>"
-                       f"<b>Drop Point:</b> {row['Drop Point']}<br>"
-                       f"<b>Orders:</b> {row['Orders']}"),
-                tooltip=f"Seq: {row['Stop Sequence']}",
-                icon=folium.DivIcon(html=f'<div style="font-size: 12pt; color: blue;">{row["Stop Sequence"]}</div>')
+                location=(row['Latitude'], row['Longitude']),
+                popup=popup_text,
+                icon=folium.DivIcon(html=f"""<div style="font-size: 12pt; color: blue;">{idx}</div>""")
             ).add_to(m)
-            points.append((row["Latitude"], row["Longitude"]))
-        points.append((DEPOT["Latitude"], DEPOT["Longitude"]))
-        folium.PolyLine(points, color="blue", weight=3, opacity=0.6).add_to(m)
+        # Draw polyline for route
+        folium.PolyLine(locations=route_coords, color='blue', weight=3, opacity=0.7).add_to(m)
 
-    st_folium(m, width=900, height=600)
+    st.subheader("🗺️ Optimized Delivery Routes Map")
+    st_folium(m, height=600)
 
-    st.markdown("---")
-    st.download_button("Download Optimized Routes CSV", data=df_routes.to_csv(index=False).encode("utf-8"), file_name="optimized_routes.csv")
+def main():
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        if not validate_input(df):
+            st.stop()
 
-else:
-    st.info("Upload a CSV file with the required columns to start optimization.")
+        # Filter UI
+        st.sidebar.header("Filter Routes")
+        cities = df['City'].unique().tolist()
+        city_filter = st.sidebar.multiselect("Select City", options=cities, default=cities)
+        filtered_df = df[df['City'].isin(city_filter)]
 
-st.sidebar.markdown(
-    """
-    ### Sample CSV Format
-    | Society ID | Society Name | City    | Drop Point | Latitude | Longitude | Orders |
-    |------------|--------------|---------|------------|----------|-----------|--------|
-    | S1         | Green Park   | Bangalore | Drop1     | 13.04    | 77.66     | 30     |
-    | S2         | Blue Valley  | Bangalore | Drop2     | 13.05    | 77.67     | 50     |
-    """
-)
+        societies = filtered_df['Society Name'].unique().tolist()
+        society_filter = st.sidebar.multiselect("Select Society", options=societies, default=societies)
+        filtered_df = filtered_df[filtered_df['Society Name'].isin(society_filter)]
+
+        drop_points = filtered_df['Drop Point'].unique().tolist()
+        drop_point_filter = st.sidebar.multiselect("Select Drop Point", options=drop_points, default=drop_points)
+        filtered_df = filtered_df[filtered_df['Drop Point'].isin(drop_point_filter)]
+
+        # Clustering
+        clustered_df, num_clusters = cluster_data(filtered_df)
+        st.write(f"Total Orders: {clustered_df['Orders'].sum()}, Number of Clusters (Routes): {num_clusters}")
+
+        clusters_routes = {}
+        clusters_distances = {}
+        clusters_cost_per_order = {}
+
+        for cluster_id in range(num_clusters):
+            cluster_data_df = clustered_df[clustered_df['Cluster ID'] == cluster_id]
+            route, dist = optimize_route(cluster_data_df)
+            if route is None:
+                st.warning(f"Could not find route solution for cluster {cluster_id}")
+                continue
+            clusters_routes[cluster_id] = route
+            clusters_distances[cluster_id] = dist
+            total_orders = cluster_data_df['Orders'].sum()
+            cost_per_order = vehicle_monthly_cost / total_orders if total_orders > 0 else float('inf')
+            clusters_cost_per_order[cluster_id] = cost_per_order
+
+        build_map_and_show(clustered_df, clusters_routes, clusters_distances, clusters_cost_per_order)
+
+        # Show route summary table
+        summary_rows = []
+        for cluster_id in clusters_routes:
+            cluster_df = clustered_df[clustered_df['Cluster ID'] == cluster_id]
+            summary_rows.append({
+                'Cluster ID': cluster_id,
+                'Total Orders': cluster_df['Orders'].sum(),
+                'Route Distance (approx km)': round(clusters_distances[cluster_id], 2),
+                'Cost per Order (₹)': round(clusters_cost_per_order[cluster_id], 2),
+                'Depot': DEPOT_NAME
+            })
+        summary_df = pd.DataFrame(summary_rows)
+        st.subheader("Route Summary")
+        st.dataframe(summary_df)
+
+        # Download optimized routes CSV
+        csv_buffer = []
+        for cluster_id in clusters_routes:
+            cluster_df = clustered_df[clustered_df['Cluster ID'] == cluster_id].reset_index(drop=True)
+            route = clusters_routes[cluster_id]
+            ordered_societies = []
+            for idx in route[1:-1]:  # skip depot start/end
+                row = cluster_df.iloc[idx-1]  # offset -1 due to depot at 0
+                ordered_societies.append(row)
+            route_df = pd.DataFrame(ordered_societies)
+            route_df['Cluster ID'] = cluster_id
+            route_df['Route Sequence'] = range(1, len(route_df)+1)
+            csv_buffer.append(route_df)
+
+        if csv_buffer:
+            all_routes_df = pd.concat(csv_buffer)
+            csv_data = all_routes_df.to_csv(index=False).encode('utf-8')
+            st.download_button("Download Optimized Routes CSV", data=csv_data, file_name="optimized_routes.csv", mime="text/csv")
+
+if __name__ == "__main__":
+    main()
