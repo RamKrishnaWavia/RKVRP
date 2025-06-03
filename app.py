@@ -49,12 +49,12 @@ if uploaded_file:
     df['Latitude'] = df['Latitude'].astype(float)
     df['Longitude'] = df['Longitude'].astype(float)
 
-# Ensure 'Orders' column is numeric and handle non-numeric entries
-df['Orders'] = pd.to_numeric(df['Orders'], errors='coerce')
-if df['Orders'].isnull().any():
+    # Ensure 'Orders' column is numeric and handle non-numeric entries
+    df['Orders'] = pd.to_numeric(df['Orders'], errors='coerce')
+    if df['Orders'].isnull().any():
     st.error("⚠️ Some 'Orders' values are missing or non-numeric. Please check your CSV.")
     st.stop()
-df['Orders'] = df['Orders'].astype(int)
+    df['Orders'] = df['Orders'].astype(int)
 
     # Vehicle cost input
     vehicle_cost = st.number_input("💰 Vehicle Monthly Cost (INR)", min_value=1000, value=DEFAULT_VEHICLE_COST)
