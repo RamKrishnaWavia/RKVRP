@@ -8,7 +8,7 @@ from haversine import haversine
 import pydeck as pdk
 
 # Constants
-DEFAULT_VEHICLE_COST = 35000
+DEFAULT_VEHICLE_COST = 1200
 MIN_ORDERS_GREEN = 200
 
 st.set_page_config(layout="wide")
