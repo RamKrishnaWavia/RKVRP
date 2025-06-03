@@ -17,7 +17,7 @@ DEPOT_NAME = "Soukya Road"
 
 # Streamlit app UI
 st.set_page_config(page_title="Milk Delivery Route Optimizer", layout="wide")
-st.title("🚚 Milk Delivery Route Optimization")
+st.title("🚚 RK - Delivery Route Optimization")
 st.markdown("**Objective**: Reduce Cost per Order (CPO) using vehicle capacity (200 orders), route optimization, and depot logic.")
 
 # Template CSV download
