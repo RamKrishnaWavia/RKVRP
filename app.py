@@ -57,6 +57,8 @@ def main():
         repeated_points = df.loc[df.index.repeat(df['orders'])][['latitude', 'longitude']].reset_index(drop=True)
         locations = [(DEPOT_LAT, DEPOT_LON)] + list(zip(repeated_points['latitude'], repeated_points['longitude']))
 
+        st.write(f"Total stops: {len(locations) - 1}, Vehicles: {int(np.ceil(len(repeated_points) / VEHICLE_CAPACITY))}")
+
         distance_matrix = create_distance_matrix(locations)
         time_matrix = create_time_matrix(distance_matrix)
 
@@ -102,9 +104,12 @@ def main():
                 routes.append(route)
 
             for i, route in enumerate(routes):
-                st.markdown(f"### Vehicle {i + 1} Route")
-                for loc in route:
-                    st.write(f"Lat: {loc[0]}, Lon: {loc[1]}")
+                if len(route) == 0:
+                    st.warning(f"Vehicle {i + 1} has no assigned stops.")
+                else:
+                    st.markdown(f"### Vehicle {i + 1} Route ({len(route)} stops)")
+                    for j, loc in enumerate(route, start=1):
+                        st.write(f"{j}. Lat: {loc[0]}, Lon: {loc[1]}")
         else:
             st.error("No feasible solution found.")
 
