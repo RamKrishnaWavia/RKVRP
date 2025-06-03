@@ -114,7 +114,14 @@ if uploaded_file:
         df = df.reset_index(drop=True)
 
         num_clusters = int(np.ceil(df['Orders'].sum() / MAX_ORDERS_PER_VEHICLE))
-        kmeans = KMeans(n_clusters=num_clusters, random_state=42).fit(df[['Latitude', 'Longitude']])
+        n_samples = df.shape[0]
+        num_clusters = min(num_clusters, n_samples)  # Adjust to avoid more clusters than data points
+
+    if n_samples == 0:
+        st.error("No data available to cluster.")
+        return
+
+    kmeans = KMeans(n_clusters=num_clusters, random_state=42).fit(df[['Latitude', 'Longitude']])
         df['Cluster ID'] = kmeans.labels_
 
         route_dfs = []
