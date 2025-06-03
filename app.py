@@ -122,7 +122,7 @@ if uploaded_file:
         return
 
     kmeans = KMeans(n_clusters=num_clusters, random_state=42).fit(df[['Latitude', 'Longitude']])
-        df['Cluster ID'] = kmeans.labels_
+    df['Cluster ID'] = kmeans.labels_
 
         route_dfs = []
         map_obj = folium.Map(location=[DEPOT_LAT, DEPOT_LON], zoom_start=12)
