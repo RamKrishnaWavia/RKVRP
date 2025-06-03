@@ -1,244 +1,187 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.cluster import KMeans
-from ortools.constraint_solver import routing_enums_pb2
-from ortools.constraint_solver import pywrapcp
-from haversine import haversine
+from sklearn.cluster import DBSCAN
+from haversine import haversine, Unit
+from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 import folium
 from streamlit_folium import st_folium
 
-# --------- Constants ---------
-VEHICLE_CAPACITY = 200  # max orders per vehicle (used in green cluster logic)
-GREEN_MAX_RADIUS_KM = 2
+st.set_page_config(layout="wide")
 
-# --------- Helper functions ---------
+# Constants
+VEHICLE_CAPACITY = 200  # orders per vehicle max capacity
+VEHICLE_MONTHLY_COST = 35000  # ₹
+DELIVERY_DAYS_PER_MONTH = 30
+MAX_GREEN_CLUSTER_RADIUS_KM = 2
 
 def haversine_distance_matrix(locations):
-    n = len(locations)
-    matrix = {}
-    for from_node in range(n):
-        matrix[from_node] = {}
-        for to_node in range(n):
-            if from_node == to_node:
-                matrix[from_node][to_node] = 0
+    size = len(locations)
+    dist_matrix = [[0]*size for _ in range(size)]
+    for i in range(size):
+        for j in range(size):
+            if i == j:
+                dist_matrix[i][j] = 0
             else:
-                matrix[from_node][to_node] = int(
-                    haversine(locations[from_node], locations[to_node]) * 1000
-                )  # in meters as integer
-    return matrix
+                dist_matrix[i][j] = int(haversine(locations[i], locations[j], unit=Unit.METERS))
+    return dist_matrix
 
 def optimize_route(locations):
-    """Solve TSP to get shortest route for given locations list [(lat, lon), ...]"""
     tsp_size = len(locations)
     if tsp_size <= 1:
         return list(range(tsp_size)), 0.0
 
     dist_matrix = haversine_distance_matrix(locations)
+    manager = pywrapcp.RoutingIndexManager(tsp_size, 1, 0)
+    routing = pywrapcp.RoutingModel(manager)
 
-    # Create routing model
-    routing = pywrapcp.RoutingModel(tsp_size, 1, 0)  # 1 vehicle, depot=0
-    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    )
     def distance_callback(from_index, to_index):
-        return dist_matrix[from_index][to_index]
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return dist_matrix[from_node][to_node]
 
     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-    # Solve
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+
     solution = routing.SolveWithParameters(search_parameters)
     if not solution:
         return None, 0.0
 
-    # Get route
     index = routing.Start(0)
     route = []
     route_distance = 0
     while not routing.IsEnd(index):
-        route.append(routing.IndexToNode(index))
+        route.append(manager.IndexToNode(index))
         previous_index = index
         index = solution.Value(routing.NextVar(index))
         route_distance += routing.GetArcCostForVehicle(previous_index, index, 0)
-    route.append(routing.IndexToNode(index))
+    route.append(manager.IndexToNode(index))
 
-    # route_distance in meters, convert to km
-    return route, route_distance / 1000
+    return route, route_distance / 1000  # meters to km
 
-def form_green_clusters(df, vehicle_capacity=VEHICLE_CAPACITY, max_radius_km=GREEN_MAX_RADIUS_KM):
-    unassigned = df.copy()
-    green_clusters = []
-    cluster_id = 0
+def cluster_data(df):
+    # Convert lat-lon to radians for haversine DBSCAN
+    coords = np.radians(df[['Latitude', 'Longitude']])
+    # DBSCAN eps in radians (2 km for green cluster)
+    eps_rad = MAX_GREEN_CLUSTER_RADIUS_KM / 6371.0088  
+    db = DBSCAN(eps=eps_rad, min_samples=1, algorithm='ball_tree', metric='haversine').fit(coords)
 
-    while not unassigned.empty:
-        # Start cluster with society having max orders
-        seed_idx = unassigned['Orders'].idxmax()
-        seed_row = unassigned.loc[seed_idx]
-        center = (seed_row['Latitude'], seed_row['Longitude'])
+    df['DBSCAN_Cluster'] = db.labels_
+    clusters = []
 
-        # Calculate distance of all societies from center
-        unassigned['Distance'] = unassigned.apply(
-            lambda row: haversine(center, (row['Latitude'], row['Longitude'])), axis=1
-        )
+    # For each DBSCAN cluster, check total orders to separate green vs blue
+    for cluster_id in sorted(df['DBSCAN_Cluster'].unique()):
+        cluster_df = df[df['DBSCAN_Cluster'] == cluster_id]
+        total_orders = cluster_df['Orders'].sum()
+        # Green cluster: total orders <= VEHICLE_CAPACITY and radius <= 2km
+        center_lat = cluster_df['Latitude'].mean()
+        center_lon = cluster_df['Longitude'].mean()
 
-        # Filter societies within 2 km radius
-        nearby = unassigned[unassigned['Distance'] <= max_radius_km]
+        max_dist_km = cluster_df.apply(
+            lambda row: haversine((center_lat, center_lon), (row['Latitude'], row['Longitude'])), axis=1).max()
 
-        # Sort nearby by orders descending
-        nearby = nearby.sort_values(by='Orders', ascending=False)
+        if total_orders <= VEHICLE_CAPACITY and max_dist_km <= MAX_GREEN_CLUSTER_RADIUS_KM:
+            cluster_type = 'Green'
+        else:
+            cluster_type = 'Blue'
+        
+        clusters.append({
+            'cluster_id': cluster_id,
+            'type': cluster_type,
+            'data': cluster_df,
+            'total_orders': total_orders,
+            'center': (center_lat, center_lon),
+            'max_dist_km': max_dist_km
+        })
+    return clusters
 
-        # Accumulate orders up to vehicle capacity
-        cumulative_orders = 0
-        cluster_members = []
+def main():
+    st.title("Optimized Multi-Cluster Route Planner (Green & Blue Clusters)")
 
-        for idx, row in nearby.iterrows():
-            if cumulative_orders + row['Orders'] <= vehicle_capacity:
-                cumulative_orders += row['Orders']
-                cluster_members.append(idx)
-            else:
-                break
+    uploaded_file = st.file_uploader("Upload CSV with columns: Society ID, Society Name, City, Drop Point, Latitude, Longitude, Orders", type="csv")
 
-        # If total orders in cluster < 200, do NOT form green cluster, break
-        if cumulative_orders < 200:
-            break
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+        required_cols = ['Society ID', 'Society Name', 'City', 'Drop Point', 'Latitude', 'Longitude', 'Orders']
+        if not all(col in df.columns for col in required_cols):
+            st.error(f"CSV must contain these columns: {required_cols}")
+            return
 
-        cluster_df = unassigned.loc[cluster_members].copy()
-        cluster_df['Cluster Type'] = 'Green'
-        cluster_df['Cluster ID'] = f'G{cluster_id}'
-        green_clusters.append(cluster_df)
+        # Validate Orders column numeric & non-null
+        df['Orders'] = pd.to_numeric(df['Orders'], errors='coerce')
+        invalid_orders = df[df['Orders'].isna()]
+        if not invalid_orders.empty:
+            st.warning("Some rows have invalid or missing 'Orders'. Highlighting:")
+            st.dataframe(invalid_orders.style.apply(lambda x: ['background-color: pink']*len(x), axis=1))
+            return
 
-        # Remove clustered societies from unassigned
-        unassigned = unassigned.drop(cluster_members)
-        cluster_id += 1
+        clusters = cluster_data(df)
 
-    return green_clusters, unassigned
+        st.markdown(f"### Total Clusters Found: {len(clusters)}")
+        total_orders_all = df['Orders'].sum()
+        st.markdown(f"### Total Orders: {total_orders_all}")
 
-def form_blue_clusters(df):
-    # All leftover societies form a single blue cluster
-    df = df.copy()
-    df['Cluster Type'] = 'Blue'
-    df['Cluster ID'] = 'B0'
-    return [df]
+        overall_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=11)
+        cluster_results = []
 
-def create_map(cluster_df):
-    # Center map around average lat/lon
-    center_lat = cluster_df['Latitude'].mean()
-    center_lon = cluster_df['Longitude'].mean()
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=13)
+        for c in clusters:
+            st.markdown(f"---\n### Cluster {c['cluster_id']} ({c['type']})")
+            st.markdown(f"- Total Orders: {c['total_orders']}")
+            st.markdown(f"- Max Distance from Center: {c['max_dist_km']:.2f} km")
 
-    for _, row in cluster_df.iterrows():
-        folium.CircleMarker(
-            location=(row['Latitude'], row['Longitude']),
-            radius=5,
-            popup=(
-                f"{row['Society Name']}<br>"
-                f"Orders: {row['Orders']}<br>"
-                f"City: {row['City']}"
-            ),
-            color='green' if row['Cluster Type'] == 'Green' else 'blue',
-            fill=True,
-            fill_opacity=0.7,
-        ).add_to(m)
-    return m
+            cluster_df = c['data'].reset_index(drop=True)
 
-def validate_and_clean(df):
-    required_cols = ['Society ID', 'Society Name', 'City', 'Drop Point', 'Latitude', 'Longitude', 'Orders']
-    missing_cols = [c for c in required_cols if c not in df.columns]
-    if missing_cols:
-        st.error(f"Missing required columns: {missing_cols}")
-        return None
-
-    # Remove rows with missing or invalid coordinates
-    df = df.dropna(subset=['Latitude', 'Longitude', 'Orders'])
-    df['Orders'] = pd.to_numeric(df['Orders'], errors='coerce')
-
-    invalid_orders = df[df['Orders'].isna()]
-    if not invalid_orders.empty:
-        st.warning(f"Found rows with invalid Orders values. They will be removed.")
-        st.dataframe(invalid_orders)
-        df = df.drop(invalid_orders.index)
-
-    df['Orders'] = df['Orders'].astype(int)
-    return df
-
-# -------- Streamlit UI --------
-
-st.title("Milk Delivery Route Optimization with Green & Blue Clusters")
-
-st.markdown("""
-Upload CSV with columns:
-- Society ID (unique)
-- Society Name
-- City
-- Drop Point
-- Latitude (decimal degrees)
-- Longitude (decimal degrees)
-- Orders (integer)
-""")
-
-csv_template = pd.DataFrame({
-    'Society ID': ['S1', 'S2'],
-    'Society Name': ['Society A', 'Society B'],
-    'City': ['CityX', 'CityX'],
-    'Drop Point': ['DP1', 'DP2'],
-    'Latitude': [12.9716, 12.9750],
-    'Longitude': [77.5946, 77.6000],
-    'Orders': [150, 80],
-})
-st.download_button("Download CSV Template", csv_template.to_csv(index=False), "milk_delivery_template.csv")
-
-uploaded_file = st.file_uploader("Upload your data CSV", type=['csv'])
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    df_clean = validate_and_clean(df)
-    if df_clean is not None:
-        st.success(f"Data loaded: {len(df_clean)} valid rows.")
-
-        green_clusters, remaining = form_green_clusters(df_clean)
-
-        blue_clusters = []
-        if not remaining.empty:
-            blue_clusters = form_blue_clusters(remaining)
-
-        all_clusters = green_clusters + blue_clusters
-
-        total_orders = 0
-        total_distance = 0.0
-        total_cost = 0.0
-
-        st.header("Cluster-wise Routes and Summary")
-
-        for cluster_df in all_clusters:
-            cluster_id = cluster_df['Cluster ID'].iloc[0]
-            cluster_type = cluster_df['Cluster Type'].iloc[0]
-            cluster_orders = cluster_df['Orders'].sum()
-
-            # Optimize route for cluster
-            locations = cluster_df[['Latitude', 'Longitude']].values.tolist()
-            route, route_distance = optimize_route(locations)
+            locs = cluster_df[['Latitude', 'Longitude']].values.tolist()
+            route, dist_km = optimize_route(locs)
             if route is None:
-                st.warning(f"Could not optimize route for Cluster {cluster_id}")
+                st.warning("Route optimization failed for this cluster.")
                 continue
 
-            cost_per_order = (route_distance * 35) / cluster_orders if cluster_orders > 0 else 0  # ₹35/km cost assumed
+            cpo = (VEHICLE_MONTHLY_COST / DELIVERY_DAYS_PER_MONTH) / c['total_orders'] if c['total_orders'] > 0 else 0
 
-            total_orders += cluster_orders
-            total_distance += route_distance
-            total_cost += cost_per_order * cluster_orders
+            st.markdown(f"- Optimized Route Distance: {dist_km:.2f} km")
+            st.markdown(f"- Cost Per Order (CPO): ₹{cpo:.2f}")
 
-            st.subheader(f"Cluster {cluster_id} ({cluster_type})")
-            st.write(f"Total Orders: {cluster_orders}")
-            st.write(f"Route Distance: {route_distance:.2f} km")
-            st.write(f"Cost per Order (CPO): ₹{cost_per_order:.2f}")
+            # Show route sequence
+            route_ordered = cluster_df.iloc[route]
+            st.dataframe(route_ordered[['Society ID', 'Society Name', 'Orders', 'Latitude', 'Longitude']])
 
-            # Show map with societies
-            fol_map = create_map(cluster_df)
-            st_folium(fol_map, width=700, height=450)
+            # Map cluster with route lines
+            m = folium.Map(location=c['center'], zoom_start=13)
+            folium.Marker(location=c['center'], tooltip=f"Cluster {c['cluster_id']} Center").add_to(m)
 
-        if total_orders > 0:
-            st.header("Overall Summary")
-            st.write(f"Total Orders: {total_orders}")
-            st.write(f"Total Distance: {total_distance:.2f} km")
-            st.write(f"Average Cost per Order: ₹{total_cost / total_orders:.2f}")
+            # Draw points
+            for idx, row in cluster_df.iterrows():
+                folium.CircleMarker(
+                    location=(row['Latitude'], row['Longitude']),
+                    radius=5,
+                    tooltip=f"{row['Society Name']} ({row['Orders']} orders)",
+                    color='green' if c['type'] == 'Green' else 'blue',
+                    fill=True,
+                    fill_opacity=0.7,
+                ).add_to(m)
+
+            # Draw route lines
+            route_points = [(cluster_df.iloc[i]['Latitude'], cluster_df.iloc[i]['Longitude']) for i in route]
+            folium.PolyLine(route_points, color='red', weight=3, opacity=0.8).add_to(m)
+
+            st_folium(m, width=700, height=450)
+
+            cluster_results.append({
+                'cluster_id': c['cluster_id'],
+                'type': c['type'],
+                'total_orders': c['total_orders'],
+                'route_distance_km': dist_km,
+                'cost_per_order': cpo,
+            })
+
+        # Summary table
+        summary_df = pd.DataFrame(cluster_results)
+        st.markdown("### Cluster Summary")
+        st.dataframe(summary_df)
+
+if __name__ == "__main__":
+    main()
