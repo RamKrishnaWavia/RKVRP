@@ -1,83 +1,110 @@
 import streamlit as st
 import pandas as pd
-from sklearn.cluster import DBSCAN
-from geopy.distance import geodesic
+import numpy as np
 import folium
+from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
+from sklearn.cluster import DBSCAN
 from shapely.geometry import MultiPoint
+from math import radians, cos, sin, asin, sqrt
 import io
 
-# Set page config
-st.set_page_config(page_title="Delivery Cluster Optimizer", layout="wide")
+st.set_page_config(layout="wide")
+st.title("Milk Delivery Cluster Optimizer")
 
-st.title("📦 Delivery Cluster Optimizer with CPO Calculation")
+# Sidebar parameters
+st.sidebar.header("Clustering Settings")
+VEHICLE_MIN_ORDERS = st.sidebar.number_input("Min Orders per Vehicle", value=150, step=10)
+VEHICLE_MAX_ORDERS = st.sidebar.number_input("Max Orders per Vehicle", value=450, step=10)
+VEHICLE_COST_PER_MONTH = st.sidebar.number_input("Vehicle Cost per Month", value=35000, step=1000)
+CLUSTER_RADIUS_KM = st.sidebar.slider("Clustering Radius (km)", min_value=0.1, max_value=2.0, value=0.5, step=0.1)
 
-# Upload Excel file
-uploaded_file = st.file_uploader("Upload Excel File with Society Data", type=["xlsx"])
-
-# Vehicle Cost input
-vehicle_monthly_cost = st.number_input("Enter Monthly Vehicle Cost (₹)", value=35000)
-working_days = st.number_input("Enter Working Days in a Month", value=30)
-orders_per_cluster_min = st.number_input("Min Orders per Cluster", value=200)
-orders_per_cluster_max = st.number_input("Max Orders per Cluster", value=450)
-max_distance_m = st.number_input("Max Distance Between Societies in a Cluster (meters)", value=300)
-
-def haversine_distance(latlon1, latlon2):
-    return geodesic(latlon1, latlon2).meters
+# Upload CSV file
+uploaded_file = st.file_uploader("Upload Society Orders CSV", type=["csv"])
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file)
+    df = pd.read_csv(uploaded_file)
 
-    # Ensure correct columns exist
-    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders'}
-    if not required_cols.issubset(set(df.columns)):
-        st.error(f"Missing columns in Excel. Required: {required_cols}")
-        st.stop()
+    # Drop rows with missing coordinates
+    df = df.dropna(subset=['Latitude', 'Longitude'])
 
-    coords = df[['Latitude', 'Longitude']].values
-    db = DBSCAN(eps=max_distance_m / 1000, min_samples=1, metric=lambda x, y: haversine_distance(x, y)/1000)
-    df['Cluster'] = db.fit_predict(coords)
+    # Convert coordinates to float
+    df['Latitude'] = df['Latitude'].astype(float)
+    df['Longitude'] = df['Longitude'].astype(float)
 
-    # Cluster summary
-    cluster_summary = df.groupby('Cluster').agg(
-        Total_Orders=('Orders', 'sum'),
-        Num_Societies=('Society ID', 'count'),
-        Latitude=('Latitude', 'mean'),
-        Longitude=('Longitude', 'mean')
-    ).reset_index()
+    # Prepare coordinates for clustering
+    coords = df[['Latitude', 'Longitude']].to_numpy()
+    kms_per_radian = 6371.0088
+    epsilon = CLUSTER_RADIUS_KM / kms_per_radian
 
-    # Filter valid clusters based on order volume
-    valid_clusters = cluster_summary[
-        (cluster_summary['Total_Orders'] >= orders_per_cluster_min) &
-        (cluster_summary['Total_Orders'] <= orders_per_cluster_max)
-    ].copy()
+    db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine')
+    db.fit(np.radians(coords))
+    df['Cluster'] = db.labels_
 
-    valid_clusters['CPO (₹)'] = round(vehicle_monthly_cost / (working_days * valid_clusters['Total_Orders']), 2)
+    # Aggregate by clusters
+    cluster_summary = df.groupby('Cluster').agg({
+        'Orders': 'sum',
+        'Latitude': 'mean',
+        'Longitude': 'mean'
+    }).reset_index()
 
-    st.success(f"✔ Found {len(valid_clusters)} valid clusters.")
+    # Assign cluster types
+    def cluster_type(orders):
+        if orders >= VEHICLE_MIN_ORDERS:
+            return 'Green'
+        else:
+            return 'Blue'
 
-    # Map visualization
+    cluster_summary['ClusterType'] = cluster_summary['Orders'].apply(cluster_type)
+    cluster_summary['VehiclesRequired'] = (cluster_summary['Orders'] / VEHICLE_MAX_ORDERS).apply(np.ceil).astype(int)
+    cluster_summary['TotalCost'] = cluster_summary['VehiclesRequired'] * VEHICLE_COST_PER_MONTH
+    cluster_summary['CostPerOrder'] = (cluster_summary['TotalCost'] / cluster_summary['Orders']).round(2)
+
+    # Merge back to original data for map
+    df = df.merge(cluster_summary[['Cluster', 'ClusterType']], on='Cluster', how='left')
+
+    # Display map
     m = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=13)
-    colors = ['green', 'blue', 'red', 'purple', 'orange', 'darkred', 'cadetblue']
+    marker_cluster = MarkerCluster().add_to(m)
 
-    for _, row in valid_clusters.iterrows():
-        cluster_df = df[df['Cluster'] == row['Cluster']]
-        color = colors[row['Cluster'] % len(colors)]
-        for _, point in cluster_df.iterrows():
-            folium.CircleMarker(
-                location=[point['Latitude'], point['Longitude']],
-                radius=5,
-                popup=f"{point['Society Name']} ({point['Orders']} orders)",
-                color=color,
-                fill=True
-            ).add_to(m)
+    colors = ['green', 'blue', 'red', 'orange', 'purple', 'darkred', 'lightred',
+              'beige', 'darkblue', 'darkgreen', 'cadetblue', 'darkpurple', 'white',
+              'pink', 'lightblue', 'lightgreen', 'gray', 'black', 'lightgray']
 
-    st_folium(m, width=900, height=600)
+    df['Cluster'] = df['Cluster'].fillna(-1).astype(int)
 
-    # Show summary table
-    st.subheader("📊 Cluster Summary")
-    st.dataframe(valid_clusters)
+    for i, row in df.iterrows():
+        cluster_val = row['Cluster']
+        color = colors[cluster_val % len(colors)]
+        folium.CircleMarker(
+            location=(row['Latitude'], row['Longitude']),
+            radius=5,
+            popup=f"{row['Society Name']} ({row['Orders']} orders)\nCluster {row['Cluster']} ({row['ClusterType']})",
+            color=color,
+            fill=True,
+            fill_opacity=0.7
+        ).add_to(marker_cluster)
 
-    # Download as CSV
-    csv = valid_clusters.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download Cluster Summary CSV", csv, file_name="cluster_summary.csv", mime='text/csv')
+    st_data = st_folium(m, width=1000, height=600)
+
+    # Display summary in app
+    st.subheader("Cluster Summary")
+    st.dataframe(cluster_summary)
+
+    # Downloadable cluster summary
+    csv = cluster_summary.to_csv(index=False)
+    st.download_button(
+        label="Download Cluster Summary CSV",
+        data=csv,
+        file_name='cluster_summary.csv',
+        mime='text/csv'
+    )
+
+    # Downloadable full society-cluster data
+    society_csv = df.to_csv(index=False)
+    st.download_button(
+        label="Download Society-wise Cluster CSV",
+        data=society_csv,
+        file_name='society_cluster_mapping.csv',
+        mime='text/csv'
+    )
