@@ -5,7 +5,6 @@ import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 from sklearn.cluster import DBSCAN
-from math import radians
 import io
 
 st.set_page_config(layout="wide")
@@ -15,6 +14,9 @@ st.title("Milk Delivery Cluster Optimizer")
 st.sidebar.header("Clustering Settings")
 VEHICLE_MIN_ORDERS = st.sidebar.number_input("Min Orders per Vehicle", value=150, step=10)
 VEHICLE_MAX_ORDERS = st.sidebar.number_input("Max Orders per Vehicle", value=450, step=10)
+VAN_COST_PER_MONTH = 25000
+CEE_COST_PER_MONTH = 10000
+CEE_MAX_ORDERS = 200
 CLUSTER_RADIUS_KM = st.sidebar.slider("Clustering Radius (km)", min_value=0.1, max_value=2.0, value=0.5, step=0.1)
 
 # Upload CSV file
@@ -55,23 +57,17 @@ if uploaded_file:
 
     cluster_summary['ClusterType'] = cluster_summary['Orders'].apply(cluster_type)
 
-    # Calculate Vans, CEEs, Total Cost, Cost per Order
-    def calculate_costs_van_cee(orders):
-        van_cost = 25000
-        cee_capacity = 200
-        cee_cost_per = 10000
-        
-        cees_required = int(np.ceil(orders / cee_capacity)) if orders > 0 else 0
-        total_cee_cost = cees_required * cee_cost_per
-        
-        total_cost = van_cost + total_cee_cost
-        cpo = round(total_cost / orders, 2) if orders > 0 else 0
-        
-        return pd.Series([1, cees_required, total_cost, cpo])
+    # Calculate vans and cees required per cluster
+    cluster_summary['VansRequired'] = (cluster_summary['Orders'] / VEHICLE_MAX_ORDERS).apply(np.ceil).astype(int)
+    cluster_summary['CEEsRequired'] = (cluster_summary['Orders'] / CEE_MAX_ORDERS).apply(np.ceil).astype(int)
 
-    cluster_summary[['VansRequired', 'CEEsRequired', 'TotalCost', 'CostPerOrder']] = cluster_summary['Orders'].apply(calculate_costs_van_cee)
+    # Calculate cost per cluster
+    cluster_summary['TotalCost'] = (cluster_summary['VansRequired'] * VAN_COST_PER_MONTH) + (cluster_summary['CEEsRequired'] * CEE_COST_PER_MONTH)
 
-    # Merge back to original data for map
+    # Cost per order rounded
+    cluster_summary['CostPerOrder'] = (cluster_summary['TotalCost'] / cluster_summary['Orders']).round(2)
+
+    # Merge back to original data for map coloring
     df = df.merge(cluster_summary[['Cluster', 'ClusterType']], on='Cluster', how='left')
 
     # Display map
@@ -96,13 +92,31 @@ if uploaded_file:
             fill_opacity=0.7
         ).add_to(marker_cluster)
 
-    st_data = st_folium(m, width=1000, height=600)
+    st_folium(m, width=1000, height=600)
 
-    # Display summary in app
+    # Display cluster summary
     st.subheader("Cluster Summary")
     st.dataframe(cluster_summary)
 
-    # Downloadable cluster summary
+    # Final overall summary
+    total_orders = cluster_summary['Orders'].sum()
+    total_vans = cluster_summary['VansRequired'].sum()
+    total_cees = cluster_summary['CEEsRequired'].sum()
+    total_cost = cluster_summary['TotalCost'].sum()
+    overall_cpo = round(total_cost / total_orders, 2) if total_orders > 0 else 0
+
+    final_summary_df = pd.DataFrame({
+        'Total Orders': [total_orders],
+        'Total Vans Required': [total_vans],
+        'Total CEEs Required': [total_cees],
+        'Total Cost (₹)': [total_cost],
+        'Overall Cost Per Order (₹)': [overall_cpo]
+    })
+
+    st.subheader("Final Overall Summary")
+    st.dataframe(final_summary_df)
+
+    # Downloadable cluster summary CSV
     csv = cluster_summary.to_csv(index=False)
     st.download_button(
         label="Download Cluster Summary CSV",
@@ -111,7 +125,7 @@ if uploaded_file:
         mime='text/csv'
     )
 
-    # Downloadable full society-cluster data
+    # Downloadable full society-cluster mapping CSV
     society_csv = df.to_csv(index=False)
     st.download_button(
         label="Download Society-wise Cluster CSV",
