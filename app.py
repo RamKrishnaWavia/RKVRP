@@ -5,8 +5,7 @@ import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 from sklearn.cluster import DBSCAN
-from shapely.geometry import MultiPoint
-from math import radians, cos, sin, asin, sqrt
+from math import radians
 import io
 
 st.set_page_config(layout="wide")
@@ -16,7 +15,6 @@ st.title("Milk Delivery Cluster Optimizer")
 st.sidebar.header("Clustering Settings")
 VEHICLE_MIN_ORDERS = st.sidebar.number_input("Min Orders per Vehicle", value=150, step=10)
 VEHICLE_MAX_ORDERS = st.sidebar.number_input("Max Orders per Vehicle", value=450, step=10)
-VEHICLE_COST_PER_MONTH = st.sidebar.number_input("Vehicle Cost per Month", value=35000, step=1000)
 CLUSTER_RADIUS_KM = st.sidebar.slider("Clustering Radius (km)", min_value=0.1, max_value=2.0, value=0.5, step=0.1)
 
 # Upload CSV file
@@ -56,9 +54,22 @@ if uploaded_file:
             return 'Blue'
 
     cluster_summary['ClusterType'] = cluster_summary['Orders'].apply(cluster_type)
-    cluster_summary['VehiclesRequired'] = (cluster_summary['Orders'] / VEHICLE_MAX_ORDERS).apply(np.ceil).astype(int)
-    cluster_summary['TotalCost'] = cluster_summary['VehiclesRequired'] * VEHICLE_COST_PER_MONTH
-    cluster_summary['CostPerOrder'] = (cluster_summary['TotalCost'] / cluster_summary['Orders']).round(2)
+
+    # Calculate Vans, CEEs, Total Cost, Cost per Order
+    def calculate_costs_van_cee(orders):
+        van_cost = 25000
+        cee_capacity = 200
+        cee_cost_per = 10000
+        
+        cees_required = int(np.ceil(orders / cee_capacity)) if orders > 0 else 0
+        total_cee_cost = cees_required * cee_cost_per
+        
+        total_cost = van_cost + total_cee_cost
+        cpo = round(total_cost / orders, 2) if orders > 0 else 0
+        
+        return pd.Series([1, cees_required, total_cost, cpo])
+
+    cluster_summary[['VansRequired', 'CEEsRequired', 'TotalCost', 'CostPerOrder']] = cluster_summary['Orders'].apply(calculate_costs_van_cee)
 
     # Merge back to original data for map
     df = df.merge(cluster_summary[['Cluster', 'ClusterType']], on='Cluster', how='left')
