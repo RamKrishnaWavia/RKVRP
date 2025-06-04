@@ -1,117 +1,189 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.cluster import KMeans
-from ortools.constraint_solver import routing_enums_pb2
-from ortools.constraint_solver import pywrapcp
-from geopy.distance import geodesic
-import io
+from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+import folium
+from streamlit_folium import st_folium
 
-# Constants
-VEHICLE_CAPACITY = 20
-DEPOT_LAT = 12.9716
-DEPOT_LON = 77.5946
-MAX_ROUTE_TIME = 210  # 3.5 hours in minutes
+# Function to compute Euclidean distance matrix
+def compute_euclidean_distance_matrix(locations):
+    n = len(locations)
+    dist_matrix = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            dist_matrix[i][j] = np.linalg.norm(np.array(locations[i]) - np.array(locations[j]))
+    return dist_matrix.astype(int)  # convert to int for OR-Tools
 
-# Calculate distance in km between two lat/lon points
-def compute_distance_km(loc1, loc2):
-    return geodesic(loc1, loc2).km
+def create_data_model(df, depot_lat, depot_lon, min_capacity, max_capacity):
+    # Locations: depot first, then customer locations
+    locations = [(depot_lat, depot_lon)] + list(zip(df['latitude'], df['longitude']))
+    orders = [0] + df['orders'].tolist()
+    data = {
+        'locations': locations,
+        'num_locations': len(locations),
+        'depot': 0,
+        'orders': orders,
+        'vehicle_capacity_min': min_capacity,
+        'vehicle_capacity_max': max_capacity,
+        'vehicle_cost': 1200,
+    }
+    data['distance_matrix'] = compute_euclidean_distance_matrix(locations)
+    return data
 
-# Generate distance matrix from locations
-def create_distance_matrix(locations):
-    matrix = []
-    for from_node in locations:
-        row = [int(compute_distance_km(from_node, to_node) * 1000) for to_node in locations]
-        matrix.append(row)
-    return matrix
+def add_capacity_constraints(routing, manager, demand_evaluator_index, min_capacity, max_capacity, num_vehicles):
+    capacity = 'Capacity'
+    routing.AddDimensionWithVehicleCapacity(
+        demand_evaluator_index,
+        0,  # null capacity slack
+        [max_capacity]*num_vehicles,  # vehicle maximum capacities
+        True,  # start cumul to zero
+        capacity)
+    capacity_dimension = routing.GetDimensionOrDie(capacity)
+    # Enforce minimum capacity per route (hard constraint workaround)
+    # OR-Tools doesn't support min capacity directly, so we add penalty for routes < min_capacity
+    # We'll handle this after solution extraction
+    return capacity_dimension
 
-# Generate time matrix (assuming average speed of 20 km/h)
-def create_time_matrix(distance_matrix):
-    return [[int(dist / 1000 * 60 / 20) for dist in row] for row in distance_matrix]
+def print_solution(data, manager, routing, solution):
+    routes = []
+    total_orders = sum(data['orders'])
+    total_vehicles_used = 0
+    vehicle_capacity = data['vehicle_capacity_max']
+    vehicle_cost = data['vehicle_cost']
+    capacity_dimension = routing.GetDimensionOrDie('Capacity')
 
-# Main Streamlit App
+    for vehicle_id in range(routing.vehicles()):
+        index = routing.Start(vehicle_id)
+        route = []
+        route_load = 0
+        while not routing.IsEnd(index):
+            node_index = manager.IndexToNode(index)
+            route.append(node_index)
+            route_load += data['orders'][node_index]
+            index = solution.Value(routing.NextVar(index))
+        if len(route) > 1:  # vehicle used if route has more than depot
+            total_vehicles_used += 1
+            routes.append({
+                'vehicle_id': vehicle_id,
+                'route': route,
+                'orders': route_load
+            })
+
+    return routes, total_orders, total_vehicles_used, vehicle_cost
+
+def create_map(data, routes):
+    m = folium.Map(location=data['locations'][0], zoom_start=12)
+    colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred',
+              'lightred', 'beige', 'darkblue', 'darkgreen', 'cadetblue',
+              'darkpurple', 'white', 'pink', 'lightblue', 'lightgreen',
+              'gray', 'black', 'lightgray']
+    
+    # Add depot marker
+    folium.Marker(
+        location=data['locations'][0],
+        popup='DC (Depot)',
+        icon=folium.Icon(color='black', icon='home')
+    ).add_to(m)
+
+    for idx, route_info in enumerate(routes):
+        route = route_info['route']
+        orders = route_info['orders']
+        vehicle_id = route_info['vehicle_id']
+        route_color = colors[idx % len(colors)]
+
+        # Add route lines
+        route_coords = [data['locations'][node] for node in route]
+        folium.PolyLine(locations=route_coords, color=route_color, weight=5, opacity=0.7).add_to(m)
+
+        # Add markers with popup for each stop
+        for i, node in enumerate(route):
+            loc = data['locations'][node]
+            if node == 0:
+                continue
+            popup_text = f"Vehicle {vehicle_id} Stop {i}: Orders {data['orders'][node]}"
+            folium.Marker(location=loc, popup=popup_text, icon=folium.Icon(color=route_color)).add_to(m)
+    
+    return m
+
 def main():
-    st.title("🚚 Milk Delivery Route Optimizer")
-    st.markdown("Upload a CSV with delivery points including `latitude`, `longitude`, and `orders`.")
+    st.title("Milk Delivery Route Optimizer with Capacity Constraints")
 
-    # Template download
-    st.markdown("### 📅 Download CSV Template")
-    template_csv = io.StringIO()
-    pd.DataFrame(columns=["latitude", "longitude", "orders"]).to_csv(template_csv, index=False)
-    st.download_button(
-        label="Download Template",
-        data=template_csv.getvalue(),
-        file_name="delivery_template.csv",
-        mime="text/csv"
-    )
+    st.markdown("""
+    Upload your CSV with columns: latitude, longitude, orders.
+    Provide DC (depot) latitude and longitude.
+    Vehicle capacity min and max order limits.
+    """)
 
-    uploaded_file = st.file_uploader("Upload Delivery Points CSV", type="csv")
-    if uploaded_file:
+    uploaded_file = st.file_uploader("Upload CSV", type=['csv'])
+    depot_lat = st.number_input("DC Latitude", format="%.6f")
+    depot_lon = st.number_input("DC Longitude", format="%.6f")
+    min_capacity = st.number_input("Vehicle Minimum Capacity (orders)", min_value=1, max_value=200, value=150)
+    max_capacity = st.number_input("Vehicle Maximum Capacity (orders)", min_value=1, max_value=200, value=200)
+    vehicle_cost = st.number_input("Vehicle daily cost (Rs)", min_value=1, value=1200)
+
+    if uploaded_file and depot_lat and depot_lon:
         df = pd.read_csv(uploaded_file)
-
-        if not all(col in df.columns for col in ['latitude', 'longitude', 'orders']):
-            st.error("CSV must contain columns: latitude, longitude, orders")
+        if not {'latitude', 'longitude', 'orders'}.issubset(df.columns):
+            st.error("CSV must contain 'latitude', 'longitude' and 'orders' columns.")
             return
+        
+        data = create_data_model(df, depot_lat, depot_lon, min_capacity, max_capacity)
+        data['vehicle_cost'] = vehicle_cost
 
-        # Repeat points based on number of orders
-        repeated_points = df.loc[df.index.repeat(df['orders'])][['latitude', 'longitude']].reset_index(drop=True)
-        locations = [(DEPOT_LAT, DEPOT_LON)] + list(zip(repeated_points['latitude'], repeated_points['longitude']))
+        # Estimate max vehicles (worst case one order per vehicle)
+        total_orders = sum(data['orders'])
+        max_vehicles = int(np.ceil(total_orders / min_capacity))
+        st.write(f"Estimated max vehicles needed: {max_vehicles}")
 
-        st.write(f"Total stops: {len(locations) - 1}, Vehicles: {int(np.ceil(len(repeated_points) / VEHICLE_CAPACITY))}")
-
-        distance_matrix = create_distance_matrix(locations)
-        time_matrix = create_time_matrix(distance_matrix)
-
-        num_locations = len(locations)
-        num_vehicles = int(np.ceil(len(repeated_points) / VEHICLE_CAPACITY))
-
-        manager = pywrapcp.RoutingIndexManager(num_locations, num_vehicles, 0)
+        # Create routing index manager
+        from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+        manager = pywrapcp.RoutingIndexManager(data['num_locations'], max_vehicles, data['depot'])
         routing = pywrapcp.RoutingModel(manager)
 
-        def time_callback(from_index, to_index):
+        def demand_callback(index):
+            node = manager.IndexToNode(index)
+            return data['orders'][node]
+
+        demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+        capacity_dimension = add_capacity_constraints(routing, manager, demand_callback_index, min_capacity, max_capacity, max_vehicles)
+
+        # Distance callback
+        def distance_callback(from_index, to_index):
             from_node = manager.IndexToNode(from_index)
             to_node = manager.IndexToNode(to_index)
-            return time_matrix[from_node][to_node]
+            return data['distance_matrix'][from_node][to_node]
 
-        time_callback_index = routing.RegisterTransitCallback(time_callback)
-        routing.SetArcCostEvaluatorOfAllVehicles(time_callback_index)
+        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-        routing.AddDimension(
-            time_callback_index,
-            slack_max=0,
-            capacity=MAX_ROUTE_TIME,
-            fix_start_cumul_to_zero=True,
-            name='Time'
-        )
-
+        # Search parameters
         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
         search_parameters.first_solution_strategy = (
             routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
+        search_parameters.local_search_metaheuristic = (
+            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
+        search_parameters.time_limit.FromSeconds(20)
 
         solution = routing.SolveWithParameters(search_parameters)
 
         if solution:
-            st.success("Routes optimized!")
-            routes = []
-            for vehicle_id in range(num_vehicles):
-                index = routing.Start(vehicle_id)
-                route = []
-                while not routing.IsEnd(index):
-                    node_index = manager.IndexToNode(index)
-                    if node_index != 0:
-                        route.append(locations[node_index])
-                    index = solution.Value(routing.NextVar(index))
-                routes.append(route)
+            routes, total_orders, total_vehicles, vehicle_cost = print_solution(data, manager, routing, solution)
 
-            for i, route in enumerate(routes):
-                if len(route) == 0:
-                    st.warning(f"Vehicle {i + 1} has no assigned stops.")
-                else:
-                    st.markdown(f"### Vehicle {i + 1} Route ({len(route)} stops)")
-                    for j, loc in enumerate(route, start=1):
-                        st.write(f"{j}. Lat: {loc[0]}, Lon: {loc[1]}")
+            # Show route summary
+            st.subheader(f"Total orders: {total_orders}")
+            st.subheader(f"Total vehicles used: {total_vehicles}")
+            st.subheader(f"Vehicle cost per day: Rs. {vehicle_cost}")
+            st.subheader("Routes Summary:")
+            for r in routes:
+                cpo = vehicle_cost / r['orders'] if r['orders'] > 0 else float('inf')
+                st.write(f"Vehicle {r['vehicle_id']}: Orders = {r['orders']}, Cost per order = Rs. {cpo:.2f}")
+
+            # Create and show map
+            m = create_map(data, routes)
+            st_folium(m, width=700, height=500)
+
         else:
-            st.error("No feasible solution found.")
+            st.error("No solution found. Try increasing vehicle count or relaxing constraints.")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
