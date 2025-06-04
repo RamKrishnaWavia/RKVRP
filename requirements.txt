@@ -8,3 +8,5 @@ streamlit-folium
 ortools
 geopy
 openpyxl
+shapely
+
