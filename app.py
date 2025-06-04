@@ -1,53 +1,64 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from ortools.constraint_solver import routing_enums_pb2
-from ortools.constraint_solver import pywrapcp
+from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from geopy.distance import great_circle
 
-st.title("Milk Delivery Route Optimizer with Society Details")
+st.title("Milk Delivery Route Optimization with Vehicle Capacity & Cost")
 
-uploaded_file = st.file_uploader(
-    "Upload CSV with columns: Society ID,Society Name,City,Drop Point,Latitude,Longitude,Orders", type=["csv"]
-)
+uploaded_file = st.file_uploader("Upload CSV with columns: Society ID,Society Name,City,Drop Point,Latitude,Longitude,Orders", type="csv")
+
+VEHICLE_CAPACITY = 200
+VEHICLE_COST_PER_DAY = 1200
+MAX_VEHICLES = 50  # max vehicles allowed
+
+def create_distance_matrix(locations):
+    size = len(locations)
+    dist_matrix = np.zeros((size, size))
+    for i in range(size):
+        for j in range(size):
+            if i == j:
+                dist_matrix[i][j] = 0
+            else:
+                dist_matrix[i][j] = great_circle(locations[i], locations[j]).kilometers * 1000  # meters
+    return dist_matrix.astype(int)
 
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
-
-    required_cols = ['Society ID', 'Society Name', 'City', 'Drop Point', 'Latitude', 'Longitude', 'Orders']
-    if not set(required_cols).issubset(df.columns):
-        st.error(f"CSV must contain columns: {required_cols}")
+    expected_cols = ['Society ID', 'Society Name', 'City', 'Drop Point', 'Latitude', 'Longitude', 'Orders']
+    if not all(col in df.columns for col in expected_cols):
+        st.error(f"CSV missing some required columns. Required: {expected_cols}")
         st.stop()
 
-    st.write("Input data preview:", df.head())
+    # Basic validation
+    if (df['Orders'] <= 0).any():
+        st.error("Orders must be positive integers")
+        st.stop()
+    if df[['Latitude','Longitude']].isnull().any().any():
+        st.error("Latitude and Longitude cannot have missing values")
+        st.stop()
 
-    # Distribution Center (DC) location (Set your DC latitude and longitude here)
-    DC_LATITUDE = 12.9716  # example Bangalore
+    total_orders = df['Orders'].sum()
+    st.write(f"Total orders in input: {total_orders}")
+
+    # Calculate minimum vehicles needed by capacity
+    min_vehicles_needed = int(np.ceil(total_orders / VEHICLE_CAPACITY))
+    st.write(f"Minimum vehicles needed (capacity {VEHICLE_CAPACITY} orders): {min_vehicles_needed}")
+
+    if min_vehicles_needed > MAX_VEHICLES:
+        st.error(f"Required vehicles exceed max allowed {MAX_VEHICLES}. Please increase vehicle count or capacity.")
+        st.stop()
+
+    # Locations with DC at index 0 (example DC location, replace with your actual DC lat,long)
+    DC_LATITUDE = 12.9716
     DC_LONGITUDE = 77.5946
 
-    # Create location list including DC at index 0
     locations = [(DC_LATITUDE, DC_LONGITUDE)] + list(zip(df['Latitude'], df['Longitude']))
-    demands = [0] + list(df['Orders'])
-
-    VEHICLE_CAPACITY = 200
-    VEHICLE_COST = 1200
-
-    # Distance matrix (in meters)
-    def create_distance_matrix(locations):
-        size = len(locations)
-        dist_matrix = np.zeros((size, size))
-        for i in range(size):
-            for j in range(size):
-                if i == j:
-                    dist_matrix[i][j] = 0
-                else:
-                    dist_matrix[i][j] = great_circle(locations[i], locations[j]).kilometers * 1000
-        return dist_matrix.astype(int)
+    demands = [0] + df['Orders'].tolist()
 
     dist_matrix = create_distance_matrix(locations)
 
-    # Routing model setup
-    manager = pywrapcp.RoutingIndexManager(len(dist_matrix), 50, 0)
+    manager = pywrapcp.RoutingIndexManager(len(dist_matrix), MAX_VEHICLES, 0)
     routing = pywrapcp.RoutingModel(manager)
 
     def distance_callback(from_index, to_index):
@@ -63,7 +74,7 @@ if uploaded_file is not None:
     routing.AddDimensionWithVehicleCapacity(
         demand_callback_index,
         0,
-        [VEHICLE_CAPACITY]*50,
+        [VEHICLE_CAPACITY]*MAX_VEHICLES,
         True,
         'Capacity'
     )
@@ -76,54 +87,59 @@ if uploaded_file is not None:
     solution = routing.SolveWithParameters(search_parameters)
 
     if solution:
-        routes_output = []
-        total_orders_all = 0
-        total_cost_all = 0
+        all_routes = []
+        total_cost = 0
+        total_orders_delivered = 0
 
-        for vehicle_id in range(50):
+        for vehicle_id in range(MAX_VEHICLES):
             index = routing.Start(vehicle_id)
             if routing.IsEnd(solution.Value(routing.NextVar(index))):
-                # no nodes in route
-                continue
+                continue  # no stops for this vehicle
 
+            route_order = 0
             route_nodes = []
-            route_orders = 0
+
             while not routing.IsEnd(index):
                 node_index = manager.IndexToNode(index)
                 if node_index != 0:
-                    route_nodes.append(node_index - 1)  # Adjust for DC at 0
-                    route_orders += demands[node_index]
+                    route_nodes.append(node_index - 1)  # zero-based index for df
+                    route_order += demands[node_index]
                 index = solution.Value(routing.NextVar(index))
 
-            vehicle_cost = VEHICLE_COST
-            cost_per_order = vehicle_cost / route_orders if route_orders > 0 else 0
-            total_orders_all += route_orders
-            total_cost_all += vehicle_cost
+            if route_order == 0:
+                continue
 
-            # Extract full details for route nodes
-            route_details = df.iloc[route_nodes][
-                ['Society ID', 'Society Name', 'City', 'Drop Point', 'Latitude', 'Longitude', 'Orders']
-            ].copy()
-            route_details['Route ID'] = vehicle_id + 1
-            route_details['Vehicle Cost (Rs)'] = vehicle_cost
-            route_details['Cost per Order (Rs)'] = round(cost_per_order, 2)
+            vehicle_cost = VEHICLE_COST_PER_DAY
+            cost_per_order = vehicle_cost / route_order
 
-            routes_output.append(route_details)
+            total_cost += vehicle_cost
+            total_orders_delivered += route_order
 
-        final_routes_df = pd.concat(routes_output, ignore_index=True)
+            route_df = df.iloc[route_nodes].copy()
+            route_df['Route ID'] = vehicle_id + 1
+            route_df['Vehicle Cost (Rs)'] = vehicle_cost
+            route_df['Cost per Order (Rs)'] = round(cost_per_order, 2)
 
-        st.write("Optimized routes with all society details:")
-        st.dataframe(final_routes_df)
+            # Add delivery sequence in route order
+            route_df['Delivery Sequence'] = list(range(1, len(route_df)+1))
 
-        st.write(f"Total vehicles required: {len(routes_output)}")
-        st.write(f"Total orders delivered: {total_orders_all}")
-        st.write(f"Total delivery cost: Rs {total_cost_all}")
-        st.write(f"Average cost per order: Rs {round(total_cost_all/total_orders_all, 2)}")
+            all_routes.append(route_df)
 
-        csv = final_routes_df.to_csv(index=False).encode()
-        st.download_button("Download full optimized routes CSV", csv, "optimized_routes_full.csv", "text/csv")
+        final_df = pd.concat(all_routes, ignore_index=True)
 
+        st.write(f"Total vehicles used: {final_df['Route ID'].nunique()}")
+        st.write(f"Total orders delivered: {total_orders_delivered}")
+        st.write(f"Total delivery cost: Rs {total_cost}")
+        st.write(f"Average cost per order: Rs {round(total_cost / total_orders_delivered, 2)}")
+
+        st.dataframe(final_df[[
+            'Route ID','Delivery Sequence','Society ID', 'Society Name', 'City', 'Drop Point', 
+            'Latitude', 'Longitude', 'Orders', 'Vehicle Cost (Rs)', 'Cost per Order (Rs)'
+        ]])
+
+        csv = final_df.to_csv(index=False).encode()
+        st.download_button("Download Optimized Routes CSV", csv, "optimized_routes.csv", "text/csv")
     else:
-        st.error("No solution found!")
+        st.error("No solution found. Try increasing time limit or reducing number of stops.")
 else:
-    st.info("Please upload the input CSV file.")
+    st.info("Upload your society orders CSV file to start optimization.")
