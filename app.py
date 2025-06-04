@@ -121,4 +121,19 @@ if uploaded_file is not None:
 
         result_df = pd.DataFrame(results)
         st.write("Optimized routes summary:")
-        st.dataframe(resu
+        st.dataframe(result_df)
+
+        st.write(f"Total vehicles required: {len(results)}")
+        st.write(f"Total orders delivered: {total_orders_all}")
+        st.write(f"Total delivery cost: Rs {total_cost_all}")
+        st.write(f"Average cost per order: Rs {round(total_cost_all/total_orders_all,2)}")
+
+        # Optionally: Download results as CSV
+        csv = result_df.to_csv(index=False).encode()
+        st.download_button("Download routes CSV", csv, "optimized_routes.csv", "text/csv")
+
+    else:
+        st.error("No solution found!")
+
+else:
+    st.info("Please upload a CSV file to get started.")
