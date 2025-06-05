@@ -1,171 +1,124 @@
-import streamlit as st
 import pandas as pd
+from geopy.distance import geodesic
+from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 import numpy as np
-import folium
-from folium.plugins import MarkerCluster, AntPath
-from streamlit_folium import st_folium
-from sklearn.cluster import DBSCAN
-from shapely.geometry import MultiPoint
-from math import radians, cos, sin, asin, sqrt
-import io
-import networkx as nx
 
-st.set_page_config(layout="wide")
-st.title("Milk Delivery Cluster Optimizer")
+# Your depot location
+depot = (13.0379, 77.6609)  # Soukya Road Bangalore (replace with exact lat, lon)
 
-# Sidebar parameters
-st.sidebar.header("Clustering Settings")
-VEHICLE_MIN_ORDERS = st.sidebar.number_input("Min Orders per Vehicle", value=150, step=10)
-VEHICLE_MAX_ORDERS = st.sidebar.number_input("Max Orders per Vehicle", value=450, step=10)
-CLUSTER_RADIUS_KM = st.sidebar.slider("Clustering Radius (km)", min_value=0.1, max_value=2.0, value=0.5, step=0.1)
+# Sample df: Replace this with your actual dataframe with columns:
+# 'SocietyID', 'Society Name', 'Latitude', 'Longitude', 'SocietyOrders', 'ClusterID'
+df = pd.read_csv('your_societies_with_clusters.csv')
 
-# User-editable costs and capacities
-VAN_COST = st.sidebar.number_input("Van Cost per Month", value=25000, step=1000)
-CEE_COST = st.sidebar.number_input("CEE Cost per Month", value=10000, step=1000)
-CEE_CAPACITY = st.sidebar.number_input("CEE Min Orders", value=200, step=10)
-VEHICLE_ORDER_CAPACITY = st.sidebar.number_input("Vehicle Order Capacity", value=450, step=10)
+# Vehicle capacity and minimum orders per cluster to assign vehicle
+VEHICLE_CAPACITY = 500
+MIN_ORDERS = 200
 
-# Upload CSV file
-uploaded_file = st.file_uploader("Upload Society Orders CSV", type=["csv"])
+def create_distance_matrix(locations):
+    size = len(locations)
+    dist_matrix = np.zeros((size, size))
+    for i in range(size):
+        for j in range(size):
+            if i == j:
+                dist_matrix[i][j] = 0
+            else:
+                dist_matrix[i][j] = geodesic(locations[i], locations[j]).km * 1000
+    return dist_matrix.astype(int)
 
-def haversine_distance(lat1, lon1, lat2, lon2):
-    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1 
-    dlon = lon2 - lon1 
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * asin(sqrt(a)) 
-    km = 6371.0088 * c
-    return km
+def optimize_route(cluster_df, depot_location, vehicle_capacity=VEHICLE_CAPACITY):
+    locations = [depot_location] + list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
+    demands = [0] + list(cluster_df['SocietyOrders'])
 
-def auto_group_minimize_cees(cluster_df):
-    points = cluster_df[['Latitude', 'Longitude', 'SocietyOrders', 'Society Name']].values.tolist()
-    unassigned = set(range(len(points)))
-    cee_groups = []
+    dist_matrix = create_distance_matrix(locations)
 
-    while unassigned:
-        current = unassigned.pop()
-        group = [current]
-        group_order = points[current][2]
+    manager = pywrapcp.RoutingIndexManager(len(dist_matrix), 1, 0)
+    routing = pywrapcp.RoutingModel(manager)
 
-        close_points = []
-        for idx in list(unassigned):
-            dist = haversine_distance(points[current][0], points[current][1], points[idx][0], points[idx][1])
-            if dist <= CLUSTER_RADIUS_KM:
-                close_points.append((idx, dist))
+    def distance_callback(from_index, to_index):
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return dist_matrix[from_node][to_node]
 
-        close_points.sort(key=lambda x: x[1])
+    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-        for idx, _ in close_points:
-            if group_order + points[idx][2] <= CEE_CAPACITY:
-                group.append(idx)
-                group_order += points[idx][2]
-                unassigned.remove(idx)
+    def demand_callback(from_index):
+        from_node = manager.IndexToNode(from_index)
+        return demands[from_node]
 
-        cee_groups.append(group)
+    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+    routing.AddDimensionWithVehicleCapacity(
+        demand_callback_index, 0, [vehicle_capacity], True, 'Capacity')
 
-    cee_routes = []
-    for group in cee_groups:
-        route = [points[idx] for idx in group]
-        cee_routes.append(route)
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
 
-    return cee_routes
+    solution = routing.SolveWithParameters(search_parameters)
+    if not solution:
+        return None, None, None
 
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    df.columns = df.columns.str.strip()
+    route = []
+    index = routing.Start(0)
+    route_distance = 0
+    route_load = 0
+    while not routing.IsEnd(index):
+        node_index = manager.IndexToNode(index)
+        route.append(node_index)
+        route_load += demands[node_index]
+        previous_index = index
+        index = solution.Value(routing.NextVar(index))
+        route_distance += routing.GetArcCostForVehicle(previous_index, index, 0)
+    route.append(manager.IndexToNode(index))
 
-    df = df.dropna(subset=['Latitude', 'Longitude'])
-    df['Latitude'] = df['Latitude'].astype(float)
-    df['Longitude'] = df['Longitude'].astype(float)
+    return route, route_distance, route_load
 
-    coords = df[['Latitude', 'Longitude']].to_numpy()
-    kms_per_radian = 6371.0088
-    epsilon = CLUSTER_RADIUS_KM / kms_per_radian
+# Summary results
+summary = []
 
-    db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine')
-    db.fit(np.radians(coords))
-    df['Cluster'] = db.labels_
+cluster_ids = df['ClusterID'].unique()
 
-    cluster_summary = df.groupby('Cluster').agg({
-        'Orders': 'sum',
-        'Latitude': 'mean',
-        'Longitude': 'mean'
-    }).reset_index()
+for cid in sorted(cluster_ids):
+    cluster_data = df[df['ClusterID'] == cid].reset_index(drop=True)
+    total_orders = cluster_data['SocietyOrders'].sum()
 
-    cluster_summary['ClusterType'] = cluster_summary['Orders'].apply(lambda x: 'Green' if x >= VEHICLE_MIN_ORDERS else 'Blue')
+    # Check min orders condition
+    if total_orders < MIN_ORDERS:
+        vehicles = 0
+        route_distance_km = 0
+        route_stops = []
+    else:
+        vehicles = 1
+        route, dist_m, load = optimize_route(cluster_data, depot)
+        route_distance_km = dist_m / 1000 if dist_m else 0
 
-    cluster_summary['VehiclesRequired'] = (cluster_summary['Orders'] / VEHICLE_ORDER_CAPACITY).apply(np.ceil).astype(int)
-    cluster_summary['CEEsRequired'] = (cluster_summary['Orders'] / CEE_CAPACITY).apply(np.ceil).astype(int)
-    cluster_summary['TotalCost'] = cluster_summary['VehiclesRequired'] * VAN_COST + cluster_summary['CEEsRequired'] * CEE_COST
-    cluster_summary['CostPerOrder'] = (cluster_summary['TotalCost'] / cluster_summary['Orders']).round(2)
+        # Prepare readable stops
+        route_stops = []
+        if route:
+            for idx in route:
+                if idx == 0:
+                    route_stops.append('Depot')
+                else:
+                    soc = cluster_data.loc[idx-1]
+                    route_stops.append(f"{soc['Society Name']} (Orders: {soc['SocietyOrders']})")
 
-    df = df.merge(cluster_summary[['Cluster', 'ClusterType']], on='Cluster', how='left')
+    summary.append({
+        'ClusterID': cid,
+        'TotalOrders': total_orders,
+        'Vehicles': vehicles,
+        'RouteDistance_km': round(route_distance_km, 2),
+        'RouteStops': route_stops
+    })
 
-    m = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=13)
-    marker_cluster = MarkerCluster().add_to(m)
+# Print summary
+for item in summary:
+    print(f"\nCluster {item['ClusterID']}:")
+    print(f" Total Orders: {item['TotalOrders']}")
+    print(f" Vehicles needed: {item['Vehicles']}")
+    print(f" Route Distance (km): {item['RouteDistance_km']}")
+    if item['Vehicles'] > 0:
+        print(" Route Stops:")
+        for stop in item['RouteStops']:
+            print(f"  - {stop}")
+    else:
+        print(" No vehicle assigned due to low orders.")
 
-    colors = ['green', 'blue', 'red', 'orange', 'purple', 'darkred', 'lightred','beige', 'darkblue', 'darkgreen', 'cadetblue', 'darkpurple', 'white','pink', 'lightblue', 'lightgreen', 'gray', 'black', 'lightgray']
-    df['Cluster'] = df['Cluster'].fillna(-1).astype(int)
-
-    for _, row in df.iterrows():
-        cluster_val = row['Cluster']
-        color = colors[cluster_val % len(colors)]
-        folium.CircleMarker(
-            location=(row['Latitude'], row['Longitude']),
-            radius=5,
-            popup=f"{row['Society Name']} ({row['Orders']} orders)\nCluster {row['Cluster']} ({row['ClusterType']})",
-            color=color,
-            fill=True,
-            fill_opacity=0.7
-        ).add_to(marker_cluster)
-
-    df['SocietyID'] = df.index
-    df = df.rename(columns={'Orders': 'SocietyOrders', 'Cluster': 'ClusterID'})
-
-    all_cee_routes = []
-    for cluster_id in df['ClusterID'].unique():
-        cluster_df = df[df['ClusterID'] == cluster_id].copy()
-        routes = auto_group_minimize_cees(cluster_df)
-        for i, route in enumerate(routes):
-            route_points = [(p[0], p[1]) for p in route]
-            AntPath(route_points, color='blue', delay=1000).add_to(m)
-            for p in route:
-                society_name = p[3]
-                df.loc[df['Society Name'] == society_name, 'CEE_Group'] = f'{cluster_id}_{i+1}'
-        all_cee_routes.extend(routes)
-
-    st_data = st_folium(m, width=1000, height=600)
-
-    df = df.merge(cluster_summary[['Cluster', 'TotalCost', 'Orders']].rename(columns={'Cluster': 'ClusterID'}), on='ClusterID', how='left')
-    df['Society_CostPerOrder'] = (df['TotalCost'] * (df['SocietyOrders'] / df['Orders'])).round(2)
-
-    st.subheader("Cluster Summary")
-    st.dataframe(cluster_summary)
-
-    st.subheader("Overall Summary")
-    total_orders = cluster_summary['Orders'].sum()
-    total_cost = cluster_summary['TotalCost'].sum()
-    overall_cpo = round(total_cost / total_orders, 2) if total_orders > 0 else 0
-    st.write(f"**Total Orders:** {total_orders}")
-    st.write(f"**Total Cost:** ₹{total_cost}")
-    st.write(f"**Overall Cost per Order (CPO):** ₹{overall_cpo}")
-
-    csv = cluster_summary.to_csv(index=False)
-    st.download_button(
-        label="Download Cluster Summary CSV",
-        data=csv,
-        file_name='cluster_summary.csv',
-        mime='text/csv'
-    )
-
-    society_csv = df[[
-        'SocietyID', 'Society Name', 'Latitude', 'Longitude', 'SocietyOrders',
-        'ClusterID', 'ClusterType', 'CEE_Group', 'Society_CostPerOrder'
-    ]].to_csv(index=False)
-
-    st.download_button(
-        label="Download Society-wise Cluster CSV",
-        data=society_csv,
-        file_name='society_cluster_mapping.csv',
-        mime='text/csv'
-    )
