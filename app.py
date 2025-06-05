@@ -11,7 +11,7 @@ import io
 import networkx as nx
 
 st.set_page_config(layout="wide")
-st.title("Milk Delivery Cluster Optimizer")
+st.title("RK - Delivery Cluster Optimizer")
 
 # Sidebar parameters
 st.sidebar.header("Clustering Settings")
