@@ -21,8 +21,8 @@ CLUSTER_RADIUS_KM = st.sidebar.slider("Clustering Radius (km)", min_value=0.1, m
 
 # Depot Location
 st.sidebar.header("Depot Location")
-DEPOT_LAT = st.sidebar.number_input("Depot Latitude", value=12.9851, format="%f")
-DEPOT_LON = st.sidebar.number_input("Depot Longitude", value=77.8321, format="%f")
+DEPOT_LAT = st.sidebar.number_input("Depot Latitude", value=13.068218288167737, format="%f")
+DEPOT_LON = st.sidebar.number_input("Depot Longitude", value=77.44607278434877, format="%f")
 
 # User-editable costs and capacities
 VAN_COST = st.sidebar.number_input("Van Cost per Month", value=25000, step=1000)
