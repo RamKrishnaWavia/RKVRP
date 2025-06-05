@@ -72,7 +72,7 @@ def auto_group_minimize_cees(cluster_df):
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
-    df.columns = df.columns.str.strip()  # Clean column names
+    df.columns = df.columns.str.strip()
 
     df = df.dropna(subset=['Latitude', 'Longitude'])
     df['Latitude'] = df['Latitude'].astype(float)
@@ -110,12 +110,10 @@ if uploaded_file:
     for _, row in df.iterrows():
         cluster_val = row['Cluster']
         color = colors[cluster_val % len(colors)]
-        society_name = row.get('Society Name', f"Society {_}")
-        orders = row.get('Orders', 0)
         folium.CircleMarker(
             location=(row['Latitude'], row['Longitude']),
             radius=5,
-            popup=f"{society_name} ({orders} orders)\nCluster {row['Cluster']} ({row['ClusterType']})",
+            popup=f"{row['Society Name']} ({row['Orders']} orders)\nCluster {row['Cluster']} ({row['ClusterType']})",
             color=color,
             fill=True,
             fill_opacity=0.7
@@ -161,7 +159,7 @@ if uploaded_file:
     )
 
     society_csv = df[[
-        'Society Name', 'Latitude', 'Longitude', 'SocietyOrders',
+        'SocietyID', 'Society Name', 'Latitude', 'Longitude', 'SocietyOrders',
         'ClusterID', 'ClusterType', 'CEE_Group', 'Society_CostPerOrder'
     ]].to_csv(index=False)
 
