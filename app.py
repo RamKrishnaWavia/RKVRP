@@ -11,18 +11,13 @@ import io
 import networkx as nx
 
 st.set_page_config(layout="wide")
-st.title("RK - Delivery Cluster Optimizer")
+st.title("Milk Delivery Cluster Optimizer")
 
 # Sidebar parameters
 st.sidebar.header("Clustering Settings")
 VEHICLE_MIN_ORDERS = st.sidebar.number_input("Min Orders per Vehicle", value=150, step=10)
 VEHICLE_MAX_ORDERS = st.sidebar.number_input("Max Orders per Vehicle", value=450, step=10)
 CLUSTER_RADIUS_KM = st.sidebar.slider("Clustering Radius (km)", min_value=0.1, max_value=2.0, value=0.5, step=0.1)
-
-# Depot Location
-st.sidebar.header("Depot Location")
-DEPOT_LAT = st.sidebar.number_input("Depot Latitude", value=13.068218288167737, format="%f")
-DEPOT_LON = st.sidebar.number_input("Depot Longitude", value=77.44607278434877, format="%f")
 
 # User-editable costs and capacities
 VAN_COST = st.sidebar.number_input("Van Cost per Month", value=25000, step=1000)
@@ -70,21 +65,20 @@ def auto_group_minimize_cees(cluster_df):
 
     cee_routes = []
     for group in cee_groups:
-        route = [points[idx] for idx in group]
+        G = nx.complete_graph(len(group))
+        for i in G.nodes:
+            G.nodes[i]['coord'] = (points[group[i]][0], points[group[i]][1])
+
+        for i, j in G.edges:
+            coord1 = G.nodes[i]['coord']
+            coord2 = G.nodes[j]['coord']
+            G[i][j]['weight'] = haversine_distance(coord1[0], coord1[1], coord2[0], coord2[1])
+
+        tsp_path = nx.approximation.traveling_salesman_problem(G, cycle=False, method='greedy')
+        route = [points[group[i]] for i in tsp_path]
         cee_routes.append(route)
 
     return cee_routes
-
-def optimize_route(points):
-    G = nx.complete_graph(len(points))
-    for i in range(len(points)):
-        for j in range(i + 1, len(points)):
-            dist = haversine_distance(points[i][0], points[i][1], points[j][0], points[j][1])
-            G[i][j]['weight'] = dist
-            G[j][i]['weight'] = dist
-
-    tsp_route = nx.approximation.traveling_salesman_problem(G, cycle=False)
-    return tsp_route
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
@@ -108,7 +102,6 @@ if uploaded_file:
         'Longitude': 'mean'
     }).reset_index()
 
-    cluster_summary['DistanceFromDepotKM'] = cluster_summary.apply(lambda row: round(haversine_distance(DEPOT_LAT, DEPOT_LON, row['Latitude'], row['Longitude']), 2), axis=1)
     cluster_summary['ClusterType'] = cluster_summary['Orders'].apply(lambda x: 'Green' if x >= VEHICLE_MIN_ORDERS else 'Blue')
 
     cluster_summary['VehiclesRequired'] = (cluster_summary['Orders'] / VEHICLE_ORDER_CAPACITY).apply(np.ceil).astype(int)
@@ -139,33 +132,17 @@ if uploaded_file:
     df['SocietyID'] = df.index
     df = df.rename(columns={'Orders': 'SocietyOrders', 'Cluster': 'ClusterID'})
 
-    optimized_routes = []
     all_cee_routes = []
     for cluster_id in df['ClusterID'].unique():
         cluster_df = df[df['ClusterID'] == cluster_id].copy()
         routes = auto_group_minimize_cees(cluster_df)
         for i, route in enumerate(routes):
-            if len(route) > 1:
-                tsp_order = optimize_route(route)
-                route = [route[j] for j in tsp_order]
-
-            route_points = [(DEPOT_LAT, DEPOT_LON)] + [(p[0], p[1]) for p in route] + [(DEPOT_LAT, DEPOT_LON)]
+            route_points = [(p[0], p[1]) for p in route]
             AntPath(route_points, color='blue', delay=1000).add_to(m)
-
-            for seq, p in enumerate(route, start=1):
+            for p in route:
                 society_name = p[3]
                 df.loc[df['Society Name'] == society_name, 'CEE_Group'] = f'{cluster_id}_{i+1}'
-                df.loc[df['Society Name'] == society_name, 'RouteSeq'] = seq
-                optimized_routes.append({
-                    'ClusterID': cluster_id,
-                    'CEE_Group': f'{cluster_id}_{i+1}',
-                    'Society Name': society_name,
-                    'Latitude': p[0],
-                    'Longitude': p[1],
-                    'Sequence': seq
-                })
-
-            all_cee_routes.append(route)
+        all_cee_routes.extend(routes)
 
     st_data = st_folium(m, width=1000, height=600)
 
@@ -193,7 +170,7 @@ if uploaded_file:
 
     society_csv = df[[
         'SocietyID', 'Society Name', 'Latitude', 'Longitude', 'SocietyOrders',
-        'ClusterID', 'ClusterType', 'CEE_Group', 'Society_CostPerOrder', 'RouteSeq'
+        'ClusterID', 'ClusterType', 'CEE_Group', 'Society_CostPerOrder'
     ]].to_csv(index=False)
 
     st.download_button(
@@ -202,13 +179,3 @@ if uploaded_file:
         file_name='society_cluster_mapping.csv',
         mime='text/csv'
     )
-
-    if optimized_routes:
-        routes_df = pd.DataFrame(optimized_routes)
-        route_csv = routes_df.to_csv(index=False)
-        st.download_button(
-            label="Download Optimized Route Sequences",
-            data=route_csv,
-            file_name='optimized_routes.csv',
-            mime='text/csv'
-        )
