@@ -75,7 +75,9 @@ def auto_group_minimize_cees(cluster_df):
         for i, j in G.edges:
             c1, c2 = G.nodes[i]['coord'], G.nodes[j]['coord']
             G[i][j]['weight'] = haversine_distance(c1[0], c1[1], c2[0], c2[1])
-        tsp_path = nx.approximation.traveling_salesman_problem(G, cycle=False, method='greedy')
+        from networkx.algorithms.approximation import greedy_tsp
+        tsp_path = nx.approximation.traveling_salesman_problem(G, cycle=False, method=greedy_tsp)
+
         route = [points[group[i]] for i in tsp_path]
         cee_routes.append(route)
 
