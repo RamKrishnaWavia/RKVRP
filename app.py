@@ -31,8 +31,9 @@ if uploaded_file is not None:
 
         # Minimum 200 orders filter
         cluster_summary = df.groupby("Cluster_ID")["Orders"].sum().reset_index()
-        valid_clusters = cluster_summary[cluster_summary["Orders"] >= 200]["Cluster_ID"]
-        df["Valid_Cluster"] = df["Cluster_ID"].apply(lambda x: x if x in valid_clusters.values else -1)
+        valid_clusters = cluster_summary.loc[cluster_summary["Orders"] >= 200, "Cluster_ID"].tolist()
+        df["Valid_Cluster"] = df["Cluster_ID"].apply(lambda x: x if x in valid_clusters else -1)
+
 
         cee_routes = []
         cee_counter = count(start=1)
