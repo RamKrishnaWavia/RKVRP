@@ -3,86 +3,71 @@ import pandas as pd
 import numpy as np
 import networkx as nx
 from sklearn.cluster import DBSCAN
-from haversine import haversine, Unit
-from itertools import count
+from geopy.distance import geodesic
 
-# Sidebar depot settings
-st.sidebar.header("Depot Location (Editable)")
-depot_lat = st.sidebar.number_input("Depot Latitude", value=12.935, format="%.6f")
-depot_lon = st.sidebar.number_input("Depot Longitude", value=77.614, format="%.6f")
+# Helper to calculate distance in km
+def haversine(lat1, lon1, lat2, lon2):
+    return geodesic((lat1, lon1), (lat2, lon2)).km
 
-# File upload
-uploaded_file = st.file_uploader("Upload Input CSV", type="csv")
-if uploaded_file is not None:
+# Sidebar input for depot coordinates
+st.sidebar.title("Depot Location")
+depot_lat = st.sidebar.number_input("Depot Latitude", value=12.9352)
+depot_lon = st.sidebar.number_input("Depot Longitude", value=77.6146)
+
+# Upload CSV
+st.title("Milk Delivery Route Optimizer")
+uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+
+if uploaded_file:
     df = pd.read_csv(uploaded_file)
+    st.subheader("Uploaded Data")
+    st.dataframe(df)
 
-    # Required columns check
-    required_cols = {"Society_ID", "Society_Name", "Latitude", "Longitude", "Orders"}
-    if not required_cols.issubset(df.columns):
-        st.error(f"CSV must include: {', '.join(required_cols)}")
-    else:
-        # Clustering
-        coords = df[["Latitude", "Longitude"]].values
-        kms_per_radian = 6371.0088
-        epsilon = 2 / kms_per_radian  # 2 km radius
+    # Clustering using DBSCAN with 2km radius (~0.018 radians)
+    coords = df[["Latitude", "Longitude"]].to_numpy()
+    kms_per_radian = 6371.0088
+    epsilon = 2 / kms_per_radian
+    db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine').fit(np.radians(coords))
+    df["Cluster_ID"] = db.labels_
 
-        db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine')
-        df["Cluster_ID"] = db.fit_predict(np.radians(coords))
+    # Filter clusters with minimum 200 orders
+    cluster_summary = df.groupby("Cluster_ID")["Orders"].sum().reset_index()
+    valid_clusters = cluster_summary[cluster_summary["Orders"] >= 200]["Cluster_ID"]
+    df = df[df["Cluster_ID"].isin(valid_clusters)]
 
-        # Minimum 200 orders filter
-        cluster_summary = df.groupby("Cluster_ID")["Orders"].sum().reset_index()
-        valid_clusters = cluster_summary.loc[cluster_summary["Orders"] >= 200, "Cluster_ID"].tolist()
-        df["Valid_Cluster"] = df["Cluster_ID"].apply(lambda x: x if x in valid_clusters else -1)
+    # TSP route optimization within each cluster
+    route_results = []
+    for cluster_id in df["Cluster_ID"].unique():
+        cluster_df = df[df["Cluster_ID"] == cluster_id].copy()
+        points = [(depot_lat, depot_lon)] + cluster_df[["Latitude", "Longitude"]].to_numpy().tolist()
 
+        G = nx.complete_graph(len(points))
+        for i in range(len(points)):
+            for j in range(len(points)):
+                if i != j:
+                    dist = haversine(points[i][0], points[i][1], points[j][0], points[j][1])
+                    G[i][j]["weight"] = dist
 
-        cee_routes = []
-        cee_counter = count(start=1)
-        final_routes = []
+        tsp_path = nx.approximation.traveling_salesman_problem(G, cycle=False, method="greedy")
+        delivery_seq = []
+        for i, idx in enumerate(tsp_path[1:], 1):  # skip depot
+            row = cluster_df.iloc[idx - 1]
+            delivery_seq.append({
+                "Cluster_ID": cluster_id,
+                "Society_ID": row["Society_ID"],
+                "Society_Name": row["Society_Name"],
+                "Latitude": row["Latitude"],
+                "Longitude": row["Longitude"],
+                "Orders": row["Orders"],
+                "Delivery_Sequence": f"S{i}"
+            })
 
-        for cluster in sorted(df["Valid_Cluster"].unique()):
-            cluster_df = df[df["Valid_Cluster"] == cluster].copy()
-            if cluster == -1:
-                for _, row in cluster_df.iterrows():
-                    row["CEE_ID"] = next(cee_counter)
-                    row["Delivery_Sequence"] = "S1"
-                    final_routes.append(row)
-                continue
+        route_results.extend(delivery_seq)
 
-            locations = [(row["Latitude"], row["Longitude"]) for _, row in cluster_df.iterrows()]
-            depot = (depot_lat, depot_lon)
-            G = nx.Graph()
-            for i, loc1 in enumerate(locations):
-                G.add_node(i, pos=loc1)
-                for j, loc2 in enumerate(locations):
-                    if i != j:
-                        dist = haversine(loc1, loc2, unit=Unit.KILOMETERS)
-                        G.add_edge(i, j, weight=dist)
+    routed_df = pd.DataFrame(route_results)
+    st.subheader("Route Plan")
+    st.dataframe(routed_df)
 
-            tsp_path = nx.approximation.traveling_salesman_problem(G, cycle=False, method="greedy")
-
-            group_id = next(cee_counter)
-            for seq, idx in enumerate(tsp_path):
-                row = cluster_df.iloc[idx].copy()
-                row["CEE_ID"] = group_id
-                row["Delivery_Sequence"] = f"S{seq+1}"
-                final_routes.append(row)
-
-        routed_df = pd.DataFrame(final_routes)
-
-        cee_summary = routed_df.groupby(["Cluster_ID", "CEE_ID"]).agg({
-            "Society_ID": "count",
-            "Orders": "sum"
-        }).reset_index().rename(columns={"Society_ID": "Societies_Assigned", "Orders": "Total_Orders"})
-
-        st.subheader("Clustered & Routed Delivery Plan")
-        st.dataframe(routed_df[[
-            "Society_ID", "Society_Name", "Latitude", "Longitude",
-            "Orders", "CEE_ID", "Delivery_Sequence", "Cluster_ID"
-        ]])
-
-        st.subheader("CEE Group Summary (Post Clustering)")
-        st.dataframe(cee_summary)
-
-        # Downloadable output
-        csv_output = routed_df.to_csv(index=False)
-        st.download_button("Download Delivery Plan CSV", data=csv_output, file_name="cee_delivery_plan.csv", mime="text/csv")
+    # Download CSV
+    csv = routed_df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Route Plan CSV", csv, "routed_plan.csv", "text/csv")
