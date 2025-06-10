@@ -2,72 +2,99 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import networkx as nx
-from sklearn.cluster import DBSCAN
-from geopy.distance import geodesic
+from sklearn.metrics.pairwise import haversine_distances
+from math import radians
 
-# Helper to calculate distance in km
-def haversine(lat1, lon1, lat2, lon2):
-    return geodesic((lat1, lon1), (lat2, lon2)).km
+st.set_page_config(layout="wide")
+st.title("Milk Delivery Cluster and Route Optimizer")
 
-# Sidebar input for depot coordinates
-st.sidebar.title("Depot Location")
+# Sidebar for Depot Lat/Long
+st.sidebar.header("Depot Location")
 depot_lat = st.sidebar.number_input("Depot Latitude", value=12.9352)
-depot_lon = st.sidebar.number_input("Depot Longitude", value=77.6146)
+depot_lon = st.sidebar.number_input("Depot Longitude", value=77.6145)
 
-# Upload CSV
-st.title("Milk Delivery Route Optimizer")
-uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-
+# File upload
+uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
-    st.subheader("Uploaded Data")
-    st.dataframe(df)
+    required_cols = {"Society_ID", "Orders", "Latitude", "Longitude"}
+    if not required_cols.issubset(df.columns):
+        st.error("Input file must have columns: Society_ID, Orders, Latitude, Longitude")
+        st.stop()
 
-    # Clustering using DBSCAN with 2km radius (~0.018 radians)
-    coords = df[["Latitude", "Longitude"]].to_numpy()
-    kms_per_radian = 6371.0088
-    epsilon = 2 / kms_per_radian
-    db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine').fit(np.radians(coords))
-    df["Cluster_ID"] = db.labels_
+    df['Latitude'] = df['Latitude'].astype(float)
+    df['Longitude'] = df['Longitude'].astype(float)
 
-    # Filter clusters with minimum 200 orders
-    cluster_summary = df.groupby("Cluster_ID")["Orders"].sum().reset_index()
-    valid_clusters = cluster_summary[cluster_summary["Orders"] >= 200]["Cluster_ID"]
-    df = df[df["Cluster_ID"].isin(valid_clusters)]
+    # Compute distance matrix in km
+    coords = df[['Latitude', 'Longitude']].applymap(radians).to_numpy()
+    dist_matrix = haversine_distances(coords) * 6371  # Earth radius in km
 
-    # TSP route optimization within each cluster
-    route_results = []
-    for cluster_id in df["Cluster_ID"].unique():
-        cluster_df = df[df["Cluster_ID"] == cluster_id].copy()
-        points = [(depot_lat, depot_lon)] + cluster_df[["Latitude", "Longitude"]].to_numpy().tolist()
+    # Clustering logic: societies within 2km radius and total orders >= 200
+    clusters = []
+    assigned = set()
+    for i in range(len(df)):
+        if i in assigned:
+            continue
+        cluster = [i]
+        order_sum = df.iloc[i]['Orders']
+        for j in range(i + 1, len(df)):
+            if j not in assigned and dist_matrix[i][j] <= 2:
+                cluster.append(j)
+                order_sum += df.iloc[j]['Orders']
+        if order_sum >= 200:
+            clusters.append(cluster)
+            assigned.update(cluster)
 
-        G = nx.complete_graph(len(points))
-        for i in range(len(points)):
-            for j in range(len(points)):
+    # Assign cluster IDs
+    cluster_map = {}
+    for cluster_id, indices in enumerate(clusters, start=1):
+        for idx in indices:
+            cluster_map[idx] = cluster_id
+
+    df["Cluster_ID"] = df.index.map(lambda x: cluster_map.get(x, -1))
+
+    valid_clusters = df[df["Cluster_ID"] != -1]["Cluster_ID"].unique()
+    st.success(f"Generated {len(valid_clusters)} clusters")
+
+    all_routes = []
+    for cluster_id in valid_clusters:
+        cluster_df = df[df["Cluster_ID"] == cluster_id].copy().reset_index(drop=True)
+
+        # Add depot as node 0
+        nodes = [{"Society_ID": "Depot", "Latitude": depot_lat, "Longitude": depot_lon, "Orders": 0}]
+        nodes += cluster_df.to_dict("records")
+        route_df = pd.DataFrame(nodes)
+
+        # Create graph
+        G = nx.Graph()
+        for i, row1 in route_df.iterrows():
+            for j, row2 in route_df.iterrows():
                 if i != j:
-                    dist = haversine(points[i][0], points[i][1], points[j][0], points[j][1])
-                    G[i][j]["weight"] = dist
+                    lat1, lon1 = radians(row1["Latitude"]), radians(row1["Longitude"])
+                    lat2, lon2 = radians(row2["Latitude"]), radians(row2["Longitude"])
+                    dist = haversine_distances([[lat1, lon1], [lat2, lon2]])[0][1] * 6371
+                    G.add_edge(i, j, weight=dist)
 
         tsp_path = nx.approximation.traveling_salesman_problem(G, cycle=False, method="greedy")
-        delivery_seq = []
-        for i, idx in enumerate(tsp_path[1:], 1):  # skip depot
-            row = cluster_df.iloc[idx - 1]
-            delivery_seq.append({
+
+        route_sequence = []
+        for seq_num, idx in enumerate(tsp_path[1:], start=1):  # Skip depot
+            row = cluster_df.iloc[idx - 1]  # depot is at 0
+            route_sequence.append({
                 "Cluster_ID": cluster_id,
+                "Delivery_Seq": f"S{seq_num}",
                 "Society_ID": row["Society_ID"],
-                "Society_Name": row["Society_Name"],
-                "Latitude": row["Latitude"],
-                "Longitude": row["Longitude"],
                 "Orders": row["Orders"],
-                "Delivery_Sequence": f"S{i}"
+                "Latitude": row["Latitude"],
+                "Longitude": row["Longitude"]
             })
 
-        route_results.extend(delivery_seq)
+        route_df = pd.DataFrame(route_sequence)
+        all_routes.append(route_df)
 
-    routed_df = pd.DataFrame(route_results)
-    st.subheader("Route Plan")
-    st.dataframe(routed_df)
+        st.subheader(f"Cluster {cluster_id} Route")
+        st.dataframe(route_df)
+        st.map(route_df[["Latitude", "Longitude"]])
 
-    # Download CSV
-    csv = routed_df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download Route Plan CSV", csv, "routed_plan.csv", "text/csv")
+    final_output = pd.concat(all_routes, ignore_index=True)
+    st.download_button("Download Route Plan CSV", final_output.to_csv(index=False), file_name="delivery_routes.csv")
