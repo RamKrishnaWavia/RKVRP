@@ -5,17 +5,21 @@ from geopy.distance import great_circle
 import folium
 from streamlit_folium import st_folium
 from io import StringIO
+import itertools
 
-# Helper to calculate route distance
+# Helper to calculate route distance in km
 def calculate_route_distance(route):
     distance = 0.0
     for i in range(len(route) - 1):
         distance += great_circle(route[i], route[i+1]).km
     return distance
 
-# Helper to compute distance in meters
-def is_within_distance(coord1, coord2, max_dist=2.0):
-    return great_circle(coord1, coord2).km <= max_dist
+# Check if all pairwise distances in a cluster (with candidate) are within 2 km
+def is_valid_cluster(coords, max_dist_km=2.0):
+    for (a, b) in itertools.combinations(coords, 2):
+        if great_circle(a, b).km > max_dist_km:
+            return False
+    return True
 
 st.title("Milk & Grocery Delivery Clustering Tool")
 
@@ -40,20 +44,20 @@ if uploaded_file is not None:
 
     while not unassigned.empty:
         seed = unassigned.iloc[0]
-        seed_coord = (seed['Latitude'], seed['Longitude'])
-        seed_orders = seed['Orders']
-
         cluster_members = [seed.name]
-        cluster_orders = seed_orders
+        cluster_orders = seed['Orders']
+        cluster_coords = [(seed['Latitude'], seed['Longitude'])]
 
         for idx, row in unassigned.iloc[1:].iterrows():
             if cluster_orders >= 230:
                 break
-            coord = (row['Latitude'], row['Longitude'])
-            if all(is_within_distance(coord, (df.loc[i]['Latitude'], df.loc[i]['Longitude'])) for i in cluster_members):
+            new_coord = (row['Latitude'], row['Longitude'])
+            temp_coords = cluster_coords + [new_coord]
+            if is_valid_cluster(temp_coords):
                 if cluster_orders + row['Orders'] <= 230:
                     cluster_members.append(row.name)
                     cluster_orders += row['Orders']
+                    cluster_coords.append(new_coord)
 
         df.loc[cluster_members, 'Cluster'] = cluster_id
         cluster_id += 1
