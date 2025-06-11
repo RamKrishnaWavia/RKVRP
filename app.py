@@ -1,141 +1,174 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from sklearn.cluster import DBSCAN
 import networkx as nx
 from geopy.distance import geodesic
-from sklearn.cluster import DBSCAN
 import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
-import io
+from io import StringIO
 
-# -------------------- Sidebar for Depot Coordinates --------------------
-st.sidebar.header("Depot Location")
-depot_lat = st.sidebar.number_input("Depot Latitude", value=12.9352, format="%.6f")
-depot_lon = st.sidebar.number_input("Depot Longitude", value=77.6142, format="%.6f")
+st.set_page_config(page_title="Milk Delivery Route Optimizer", layout="wide")
+st.title("🥛 Milk Delivery Route Optimizer")
 
-# -------------------- Template Download Button --------------------
-@st.cache_data
-def get_template_csv():
-    df_template = pd.DataFrame({
+# --- Constants ---
+MIN_ORDERS = 200
+MAX_ORDERS = 225
+DISTANCE_THRESHOLD_KM = 2
+
+# --- Helper Functions ---
+
+def haversine_dist(a, b):
+    return geodesic(a, b).km
+
+def create_distance_matrix(coords):
+    n = len(coords)
+    dist_matrix = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                dist_matrix[i][j] = haversine_dist(coords[i], coords[j])
+    return dist_matrix
+
+def optimize_route(coords):
+    G = nx.complete_graph(len(coords))
+    for i in range(len(coords)):
+        for j in range(len(coords)):
+            if i != j:
+                dist = haversine_dist(coords[i], coords[j])
+                G[i][j]['weight'] = dist
+    try:
+        path = nx.approximation.traveling_salesman_problem(G, cycle=False, method='greedy')
+        return path
+    except Exception as e:
+        st.warning(f"TSP optimization failed: {e}")
+        return list(range(len(coords)))
+
+def cluster_societies(df):
+    coords = df[["Latitude", "Longitude"]].values
+    db = DBSCAN(eps=DISTANCE_THRESHOLD_KM/6371, min_samples=1, metric='haversine').fit(np.radians(coords))
+    df["Temp_Cluster"] = db.labels_
+
+    clustered_df = pd.DataFrame()
+    cluster_id = 0
+    for temp_cluster in df["Temp_Cluster"].unique():
+        cluster_group = df[df["Temp_Cluster"] == temp_cluster]
+        current_batch = []
+        batch_orders = 0
+        for _, row in cluster_group.iterrows():
+            current_batch.append(row)
+            batch_orders += row["Orders"]
+            if batch_orders >= MIN_ORDERS:
+                if batch_orders <= MAX_ORDERS:
+                    for r in current_batch:
+                        clustered_df = pd.concat([clustered_df, pd.DataFrame([{
+                            **r,
+                            "Cluster_ID": cluster_id,
+                            "Cluster_Type": "Green"
+                        }])])
+                    cluster_id += 1
+                current_batch = []
+                batch_orders = 0
+        # Remaining societies
+        for r in current_batch:
+            clustered_df = pd.concat([clustered_df, pd.DataFrame([{
+                **r,
+                "Cluster_ID": cluster_id,
+                "Cluster_Type": "Blue"
+            }])])
+        cluster_id += 1
+    clustered_df.reset_index(drop=True, inplace=True)
+    return clustered_df
+
+def add_delivery_sequence(df, depot_coords):
+    final_df = pd.DataFrame()
+    for cluster_id in df["Cluster_ID"].unique():
+        cluster_df = df[df["Cluster_ID"] == cluster_id].copy()
+        coords = [depot_coords] + cluster_df[["Latitude", "Longitude"]].values.tolist()
+        route_order = optimize_route(coords)
+
+        delivery_points = []
+        total_dist = 0
+        for i, idx in enumerate(route_order[1:]):  # Skip depot
+            row = cluster_df.iloc[idx - 1]
+            dist_from_prev = (
+                haversine_dist(coords[route_order[i]], coords[route_order[i+1]])
+                if i+1 < len(route_order) else 0
+            )
+            total_dist += dist_from_prev
+            row["Delivery_Sequence"] = f"S{i+1}"
+            row["Distance_from_prev_km"] = round(dist_from_prev, 2)
+            delivery_points.append(row)
+        cluster_result = pd.DataFrame(delivery_points)
+        final_df = pd.concat([final_df, cluster_result])
+    final_df.reset_index(drop=True, inplace=True)
+    return final_df
+
+def plot_map(df, depot_coords):
+    m = folium.Map(location=depot_coords, zoom_start=12)
+    folium.Marker(depot_coords, tooltip="Depot", icon=folium.Icon(color="black")).add_to(m)
+
+    for cluster_id in df["Cluster_ID"].unique():
+        cluster_df = df[df["Cluster_ID"] == cluster_id]
+        color = "green" if cluster_df["Cluster_Type"].iloc[0] == "Green" else "blue"
+        points = [depot_coords] + cluster_df.sort_values("Delivery_Sequence")[["Latitude", "Longitude"]].values.tolist()
+
+        for _, row in cluster_df.iterrows():
+            tooltip = f"{row['Society_Name']}<br>Orders: {row['Orders']}<br>Distance: {row['Distance_from_prev_km']} km"
+            folium.Marker(
+                [row["Latitude"], row["Longitude"]],
+                tooltip=tooltip,
+                icon=folium.Icon(color=color)
+            ).add_to(m)
+
+        folium.PolyLine(points, color=color, weight=2.5, opacity=0.8).add_to(m)
+    return m
+
+def generate_template():
+    data = {
         "Society_ID": [],
         "Society_Name": [],
         "Latitude": [],
         "Longitude": [],
         "Orders": []
-    })
-    return df_template.to_csv(index=False).encode('utf-8')
+    }
+    df = pd.DataFrame(data)
+    csv = df.to_csv(index=False)
+    return csv
 
-st.sidebar.download_button("📥 Download Input Template", get_template_csv(), "milk_delivery_template.csv", "text/csv")
+# --- UI ---
 
-# -------------------- File Upload --------------------
-st.title("🛵 Milk Delivery Route Optimizer")
+st.sidebar.header("Upload Input CSV")
+uploaded_file = st.sidebar.file_uploader("Choose a CSV file", type=["csv"])
 
-uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
-if not uploaded_file:
-    st.stop()
+st.sidebar.markdown("### Depot Coordinates")
+default_lat = st.sidebar.number_input("Depot Latitude", value=12.935, format="%.6f")
+default_lon = st.sidebar.number_input("Depot Longitude", value=77.614, format="%.6f")
+depot_coords = [default_lat, default_lon]
 
-df = pd.read_csv(uploaded_file)
-required_cols = ["Society_ID", "Society_Name", "Latitude", "Longitude", "Orders"]
-if not all(col in df.columns for col in required_cols):
-    st.error("Uploaded file must contain columns: " + ", ".join(required_cols))
-    st.stop()
+st.sidebar.markdown("### Download Template")
+template_csv = generate_template()
+st.sidebar.download_button("📥 Download Template", template_csv, file_name="milk_delivery_template.csv")
 
-# -------------------- Clustering --------------------
-st.subheader("📦 Clustering Societies")
-coords = df[["Latitude", "Longitude"]].values
-kms_per_radian = 6371.0088
-epsilon = 2 / kms_per_radian
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+    required_cols = {"Society_ID", "Society_Name", "Latitude", "Longitude", "Orders"}
 
-db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine').fit(np.radians(coords))
-df["Cluster_ID"] = db.labels_
+    if not required_cols.issubset(df.columns):
+        st.error("Uploaded file missing required columns.")
+    else:
+        clustered_df = cluster_societies(df)
+        routed_df = add_delivery_sequence(clustered_df, depot_coords)
+        map_obj = plot_map(routed_df, depot_coords)
 
-# -------------------- Filter clusters by total orders between 200 and 225 --------------------
-cluster_summary = df.groupby("Cluster_ID")["Orders"].sum().reset_index()
-valid_clusters = cluster_summary[(cluster_summary["Orders"] >= 200) & (cluster_summary["Orders"] <= 225)]["Cluster_ID"]
-df = df[df["Cluster_ID"].isin(valid_clusters)].copy()
-df["Cluster_Type"] = "Green"
+        st.subheader("🗺️ Clustered Delivery Route Map")
+        st_data = st_folium(map_obj, width=1000)
 
-# -------------------- TSP Route & Distance --------------------
-def compute_distance_km(latlon1, latlon2):
-    return round(geodesic(latlon1, latlon2).km, 2)
+        st.subheader("📄 Route Output Table")
+        st.dataframe(routed_df[["Society_ID", "Society_Name", "Orders", "Cluster_ID", "Cluster_Type", "Delivery_Sequence", "Distance_from_prev_km"]])
 
-def solve_tsp(cluster_df):
-    locations = [(depot_lat, depot_lon)] + list(cluster_df[["Latitude", "Longitude"]].itertuples(index=False, name=None))
-    G = nx.complete_graph(len(locations))
-
-    for i in range(len(locations)):
-        for j in range(i + 1, len(locations)):
-            dist = compute_distance_km(locations[i], locations[j])
-            G[i][j]['weight'] = dist
-            G[j][i]['weight'] = dist
-
-    try:
-        tsp_order = nx.approximation.traveling_salesman_problem(G, cycle=False, method='greedy')
-        tsp_path = [p for p in tsp_order if p != 0]  # remove depot from sequence
-        sequence = []
-        total_dist = 0
-        for i, idx in enumerate(tsp_path):
-            row = cluster_df.iloc[idx - 1]  # -1 since depot was added at beginning
-            if i == 0:
-                dist = compute_distance_km((depot_lat, depot_lon), (row["Latitude"], row["Longitude"]))
-            else:
-                prev_row = cluster_df.iloc[tsp_path[i - 1] - 1]
-                dist = compute_distance_km((prev_row["Latitude"], prev_row["Longitude"]), (row["Latitude"], row["Longitude"]))
-            total_dist += dist
-            sequence.append({
-                "Society_ID": row["Society_ID"],
-                "Society_Name": row["Society_Name"],
-                "Latitude": row["Latitude"],
-                "Longitude": row["Longitude"],
-                "Orders": row["Orders"],
-                "Delivery_Sequence": f"S{i+1}",
-                "Distance_From_Prev_km": dist,
-                "Cluster_ID": row["Cluster_ID"],
-                "Cluster_Type": row["Cluster_Type"]
-            })
-        return pd.DataFrame(sequence)
-    except Exception as e:
-        st.warning(f"❌ TSP failed for cluster. Error: {e}")
-        return pd.DataFrame()
-
-# -------------------- Run TSP for each cluster --------------------
-final_df = pd.DataFrame()
-for cluster_id in df["Cluster_ID"].unique():
-    cluster_data = df[df["Cluster_ID"] == cluster_id].reset_index(drop=True)
-    routed_cluster = solve_tsp(cluster_data)
-    final_df = pd.concat([final_df, routed_cluster], ignore_index=True)
-
-# -------------------- Map Display --------------------
-st.subheader("🗺️ Delivery Map")
-
-map_center = [df["Latitude"].mean(), df["Longitude"].mean()]
-m = folium.Map(location=map_center, zoom_start=13)
-
-colors = ["red", "blue", "green", "purple", "orange", "darkred", "cadetblue", "darkgreen"]
-for idx, cluster_id in enumerate(final_df["Cluster_ID"].unique()):
-    cluster_df = final_df[final_df["Cluster_ID"] == cluster_id]
-    color = colors[idx % len(colors)]
-
-    points = [(depot_lat, depot_lon)] + list(cluster_df[["Latitude", "Longitude"]].itertuples(index=False, name=None))
-    for i, row in cluster_df.iterrows():
-        tooltip = f"{row['Society_Name']}<br>Orders: {row['Orders']}<br>Distance from prev: {row['Distance_From_Prev_km']} km"
-        folium.Marker(
-            location=[row["Latitude"], row["Longitude"]],
-            popup=tooltip,
-            tooltip=tooltip,
-            icon=folium.Icon(color=color)
-        ).add_to(m)
-
-    folium.PolyLine(locations=points, color=color, weight=3, opacity=0.8).add_to(m)
-
-# Show depot
-folium.Marker([depot_lat, depot_lon], tooltip="Depot", icon=folium.Icon(color="black", icon="home")).add_to(m)
-
-st_folium(m, width=1000, height=600)
-
-# -------------------- Output CSV --------------------
-st.subheader("📄 Final Output")
-st.dataframe(final_df)
-csv = final_df.to_csv(index=False).encode('utf-8')
-st.download_button("📥 Download Final Route CSV", csv, "final_routed_societies.csv", "text/csv")
+        csv_out = routed_df.to_csv(index=False)
+        st.download_button("📤 Download Final Output CSV", csv_out, file_name="clustered_delivery_output.csv")
+else:
+    st.info("Please upload a CSV file with Society info to proceed.")
