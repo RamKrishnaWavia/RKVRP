@@ -14,12 +14,18 @@ def calculate_route_distance(route):
         distance += great_circle(route[i], route[i+1]).km
     return distance
 
-# Check if all pairwise distances in a cluster (with candidate) are within 2 km
-def is_valid_cluster(coords, max_dist_km=2.0):
+# Helper to calculate max pairwise distance in km
+def max_pairwise_distance(coords):
+    max_dist = 0.0
     for (a, b) in itertools.combinations(coords, 2):
-        if great_circle(a, b).km > max_dist_km:
-            return False
-    return True
+        dist = great_circle(a, b).km
+        if dist > max_dist:
+            max_dist = dist
+    return max_dist
+
+# Check if max pairwise distance in a cluster is within limit
+def is_valid_cluster(coords, max_dist_km=2.0):
+    return max_pairwise_distance(coords) <= max_dist_km
 
 st.title("Milk & Grocery Delivery Clustering Tool")
 
@@ -81,6 +87,7 @@ if uploaded_file is not None:
 
         route = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
         distance_km = calculate_route_distance(route)
+        max_dist_km = max_pairwise_distance(coords)
 
         cluster_summary.append({
             "Cluster": label,
@@ -89,7 +96,8 @@ if uploaded_file is not None:
             "No. of Societies": len(cluster_df),
             "Total Orders": total_orders,
             "Total Distance (km)": round(distance_km, 2),
-            "Valid Cluster (190–230 Orders)": "Yes" if valid_cluster else "No"
+            "Max Pairwise Distance (km)": round(max_dist_km, 2),
+            "Valid Cluster (190–230 Orders & <=2km max dist)": "Yes" if valid_cluster and max_dist_km <= 2.0 else "No"
         })
 
     # Show map
