@@ -97,17 +97,28 @@ if uploaded_file is not None:
 
         valid_cluster = 190 <= total_orders <= 230 and max_dist_km <= 2.0
 
+        # Circle for cluster
+        folium.Circle(
+            location=seed_coord,
+            radius=2000,
+            color='blue',
+            fill=True,
+            fill_opacity=0.1,
+            tooltip=f"Cluster {label}"
+        ).add_to(cluster_map)
+
         for _, row in cluster_df.iterrows():
             folium.Marker(
                 location=[row['Latitude'], row['Longitude']],
-                popup=f"{row['Society']} ({row['Orders']} orders)",
+                popup=f"{row['Society']}\nOrders: {row['Orders']}\nCluster ID: {label}",
+                tooltip=f"{row['Society']} ({row['Orders']} orders) - Cluster {label}",
                 icon=folium.Icon(color='blue', icon='info-sign')
             ).add_to(cluster_map)
 
         delivery_sequence = get_delivery_sequence(cluster_df)
 
         cluster_summary.append({
-            "Cluster": label,
+            "Cluster ID": label,
             "Society IDs": ", ".join(cluster_df['Society ID'].astype(str).tolist()),
             "Societies": ", ".join(cluster_df['Society'].tolist()),
             "No. of Societies": len(cluster_df),
