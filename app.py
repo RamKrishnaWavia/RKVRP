@@ -60,7 +60,7 @@ def estimate_timings(route_points, start_time="03:30"):
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
     return great_circle(seed_coord, coord).km <= max_dist_km
 
-st.title("Milk & Grocery Delivery Clustering Tool")
+st.title("RK - Delivery Clustering Tool")
 
 # Template file download
 st.subheader("Download Template")
