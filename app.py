@@ -13,6 +13,33 @@ def calculate_route_distance(route):
         distance += great_circle(route[i], route[i+1]).km
     return distance
 
+# Helper to create delivery sequence using nearest neighbor heuristic
+def get_delivery_sequence(cluster_df):
+    points = cluster_df[['Latitude', 'Longitude']].values.tolist()
+    names = cluster_df['Society'].tolist()
+    visited = [False] * len(points)
+    sequence = []
+
+    current_index = 0
+    sequence.append(names[current_index])
+    visited[current_index] = True
+
+    for _ in range(1, len(points)):
+        last_point = points[current_index]
+        min_dist = float('inf')
+        next_index = -1
+        for i in range(len(points)):
+            if not visited[i]:
+                dist = great_circle(last_point, points[i]).km
+                if dist < min_dist:
+                    min_dist = dist
+                    next_index = i
+        visited[next_index] = True
+        sequence.append(names[next_index])
+        current_index = next_index
+
+    return sequence
+
 # Check if candidate is within 2km from seed
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
     return great_circle(seed_coord, coord).km <= max_dist_km
@@ -77,6 +104,8 @@ if uploaded_file is not None:
                 icon=folium.Icon(color='blue', icon='info-sign')
             ).add_to(cluster_map)
 
+        delivery_sequence = get_delivery_sequence(cluster_df)
+
         cluster_summary.append({
             "Cluster": label,
             "Society IDs": ", ".join(cluster_df['Society ID'].astype(str).tolist()),
@@ -85,7 +114,8 @@ if uploaded_file is not None:
             "Total Orders": total_orders,
             "Total Distance (km)": round(distance_km, 2),
             "Max Distance from Seed (km)": round(max_dist_km, 2),
-            "Valid Cluster (190–230 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No"
+            "Valid Cluster (190–230 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No",
+            "Delivery Sequence": " → ".join(delivery_sequence)
         })
 
     # Show map
