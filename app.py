@@ -119,22 +119,33 @@ if uploaded_file is not None:
                 tooltip=f"Cluster {label}: {total_orders} Orders, {len(cluster_df)} Societies"
             ).add_to(cluster_map)
 
-        # Add markers
-        for _, row in cluster_df.iterrows():
-            folium.Marker(
-                location=[row['Latitude'], row['Longitude']],
-                popup=f"{row['Society']}\nOrders: {row['Orders']}\nCluster ID: {label}",
-                tooltip=f"{row['Society']} ({row['Orders']} orders) - Cluster {label}",
-                icon=folium.Icon(color=color, icon='info-sign')
-            ).add_to(cluster_map)
+        # Add markers (highlight seed separately)
+        for i, row in cluster_df.reset_index().iterrows():
+            if i == 0:
+                folium.Marker(
+                    location=[row['Latitude'], row['Longitude']],
+                    popup=f"{row['Society']}\nOrders: {row['Orders']}\nCluster ID: {label} (Seed)",
+                    tooltip=f"SEED: {row['Society']} ({row['Orders']} orders) - Cluster {label}",
+                    icon=folium.Icon(color="darkpurple", icon='star')
+                ).add_to(cluster_map)
+            else:
+                folium.Marker(
+                    location=[row['Latitude'], row['Longitude']],
+                    popup=f"{row['Society']}\nOrders: {row['Orders']}\nCluster ID: {label}",
+                    tooltip=f"{row['Society']} ({row['Orders']} orders) - Cluster {label}",
+                    icon=folium.Icon(color=color, icon='info-sign')
+                ).add_to(cluster_map)
 
         # Route
         delivery_sequence, route_points = get_delivery_sequence(cluster_df)
         if len(route_points) > 1:
             PolyLine(locations=route_points, color=color, weight=4, opacity=0.9).add_to(cluster_map)
 
+        suffix = chr(65 + label % 26)  # A, B, C...
+        cluster_name = f"{label}{suffix}"
+
         cluster_summary.append({
-            "Cluster ID": label,
+            "Cluster ID": cluster_name,
             "Society IDs": ", ".join(cluster_df['Society ID'].astype(str).tolist()),
             "Societies": ", ".join(cluster_df['Society'].tolist()),
             "No. of Societies": len(cluster_df),
