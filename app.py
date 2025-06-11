@@ -46,28 +46,25 @@ if uploaded_file is not None:
     df['Cluster'] = -1
     cluster_id = 0
 
-    unassigned = df.copy()
-
-    while not unassigned.empty:
-        seed = unassigned.iloc[0]
-        cluster_members = [seed.name]
+    while (df['Cluster'] == -1).any():
+        unassigned = df[df['Cluster'] == -1]
+        seed_idx = unassigned.index[0]
+        seed = df.loc[seed_idx]
+        cluster_members = [seed_idx]
         cluster_orders = seed['Orders']
         cluster_coords = [(seed['Latitude'], seed['Longitude'])]
 
-        for idx, row in unassigned.iloc[1:].iterrows():
-            if cluster_orders >= 230:
-                break
-            new_coord = (row['Latitude'], row['Longitude'])
+        for idx in unassigned.index[1:]:
+            candidate = df.loc[idx]
+            new_coord = (candidate['Latitude'], candidate['Longitude'])
             temp_coords = cluster_coords + [new_coord]
-            if is_valid_cluster(temp_coords):
-                if cluster_orders + row['Orders'] <= 230:
-                    cluster_members.append(row.name)
-                    cluster_orders += row['Orders']
-                    cluster_coords.append(new_coord)
+            if cluster_orders + candidate['Orders'] <= 230 and is_valid_cluster(temp_coords):
+                cluster_members.append(idx)
+                cluster_orders += candidate['Orders']
+                cluster_coords.append(new_coord)
 
         df.loc[cluster_members, 'Cluster'] = cluster_id
         cluster_id += 1
-        unassigned = df[df['Cluster'] == -1]
 
     cluster_summary = []
     cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=12)
@@ -75,19 +72,17 @@ if uploaded_file is not None:
     for label in sorted(df['Cluster'].unique()):
         cluster_df = df[df['Cluster'] == label]
         total_orders = cluster_df['Orders'].sum()
-        valid_cluster = 190 <= total_orders <= 230
-
         coords = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
+        distance_km = calculate_route_distance(coords)
+        max_dist_km = max_pairwise_distance(coords)
+        valid_cluster = 190 <= total_orders <= 230 and max_dist_km <= 2.0
+
         for _, row in cluster_df.iterrows():
             folium.Marker(
                 location=[row['Latitude'], row['Longitude']],
                 popup=f"{row['Society']} ({row['Orders']} orders)",
                 icon=folium.Icon(color='blue', icon='info-sign')
             ).add_to(cluster_map)
-
-        route = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
-        distance_km = calculate_route_distance(route)
-        max_dist_km = max_pairwise_distance(coords)
 
         cluster_summary.append({
             "Cluster": label,
@@ -97,7 +92,7 @@ if uploaded_file is not None:
             "Total Orders": total_orders,
             "Total Distance (km)": round(distance_km, 2),
             "Max Pairwise Distance (km)": round(max_dist_km, 2),
-            "Valid Cluster (190–230 Orders & <=2km max dist)": "Yes" if valid_cluster and max_dist_km <= 2.0 else "No"
+            "Valid Cluster (190–230 Orders & <=2km max dist)": "Yes" if valid_cluster else "No"
         })
 
     # Show map
