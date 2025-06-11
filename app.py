@@ -30,7 +30,7 @@ st.title("Milk & Grocery Delivery Clustering Tool")
 
 # Template file download
 st.subheader("Download Template")
-template = pd.DataFrame({"Society": [], "Latitude": [], "Longitude": [], "Orders": []})
+template = pd.DataFrame({"Society ID": [], "Society": [], "Latitude": [], "Longitude": [], "Orders": []})
 st.download_button("Download Template CSV", data=template.to_csv(index=False), file_name="society_template.csv")
 
 # File upload
@@ -72,6 +72,7 @@ if uploaded_file is not None:
 
             cluster_summary.append({
                 "Cluster": label,
+                "Society IDs": ", ".join(cluster_df['Society ID'].astype(str).tolist()),
                 "Societies": ", ".join(cluster_df['Society'].tolist()),
                 "No. of Societies": len(cluster_df),
                 "Total Orders": total_orders,
