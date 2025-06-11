@@ -5,6 +5,7 @@ from geopy.distance import great_circle
 import folium
 from streamlit_folium import st_folium
 from io import StringIO
+import random
 
 # Helper to calculate route distance in km
 def calculate_route_distance(route):
@@ -55,6 +56,8 @@ st.download_button("Download Template CSV", data=template.to_csv(index=False), f
 st.subheader("Upload Society Data")
 uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
+selected_cluster_id = st.sidebar.number_input("Go to Cluster ID", min_value=0, step=1)
+
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
     st.write("Uploaded Data", df)
@@ -85,6 +88,13 @@ if uploaded_file is not None:
     cluster_summary = []
     cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=12)
 
+    color_palette = [
+        "red", "blue", "green", "orange", "purple", "darkred", "lightblue", "darkgreen",
+        "cadetblue", "pink", "gray", "lightgray", "beige"
+    ]
+
+    cluster_centers = {}
+
     for label in sorted(df['Cluster'].unique()):
         cluster_df = df[df['Cluster'] == label]
         total_orders = cluster_df['Orders'].sum()
@@ -96,14 +106,17 @@ if uploaded_file is not None:
         max_dist_km = max(great_circle(seed_coord, (row['Latitude'], row['Longitude'])).km for _, row in cluster_df.iterrows())
 
         valid_cluster = 190 <= total_orders <= 230 and max_dist_km <= 2.0
+        color = color_palette[label % len(color_palette)]
 
-        # Circle for cluster
+        # Save center for navigation
+        cluster_centers[label] = seed_coord
+
         folium.Circle(
             location=seed_coord,
-            radius=2000,
-            color='blue',
+            radius=700,  # reduced circle size
+            color=color,
             fill=True,
-            fill_opacity=0.1,
+            fill_opacity=0.2,
             tooltip=f"Cluster {label}"
         ).add_to(cluster_map)
 
@@ -112,7 +125,7 @@ if uploaded_file is not None:
                 location=[row['Latitude'], row['Longitude']],
                 popup=f"{row['Society']}\nOrders: {row['Orders']}\nCluster ID: {label}",
                 tooltip=f"{row['Society']} ({row['Orders']} orders) - Cluster {label}",
-                icon=folium.Icon(color='blue', icon='info-sign')
+                icon=folium.Icon(color=color, icon='info-sign')
             ).add_to(cluster_map)
 
         delivery_sequence = get_delivery_sequence(cluster_df)
@@ -128,6 +141,12 @@ if uploaded_file is not None:
             "Valid Cluster (190–230 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No",
             "Delivery Sequence": " → ".join(delivery_sequence)
         })
+
+    # Navigate to selected cluster
+    if selected_cluster_id in cluster_centers:
+        lat, lon = cluster_centers[selected_cluster_id]
+        cluster_map.location = [lat, lon]
+        cluster_map.zoom_start = 15
 
     # Show map
     st.subheader("Cluster Map")
