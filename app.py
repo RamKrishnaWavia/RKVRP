@@ -5,7 +5,6 @@ from geopy.distance import great_circle
 import folium
 from streamlit_folium import st_folium
 from io import StringIO
-import itertools
 
 # Helper to calculate route distance in km
 def calculate_route_distance(route):
@@ -14,18 +13,9 @@ def calculate_route_distance(route):
         distance += great_circle(route[i], route[i+1]).km
     return distance
 
-# Helper to calculate max pairwise distance in km
-def max_pairwise_distance(coords):
-    max_dist = 0.0
-    for (a, b) in itertools.combinations(coords, 2):
-        dist = great_circle(a, b).km
-        if dist > max_dist:
-            max_dist = dist
-    return max_dist
-
-# Check if max pairwise distance in a cluster is within limit
-def is_valid_cluster(coords, max_dist_km=2.0):
-    return max_pairwise_distance(coords) <= max_dist_km
+# Check if candidate is within 2km from seed
+def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
+    return great_circle(seed_coord, coord).km <= max_dist_km
 
 st.title("Milk & Grocery Delivery Clustering Tool")
 
@@ -50,18 +40,17 @@ if uploaded_file is not None:
         unassigned = df[df['Cluster'] == -1]
         seed_idx = unassigned.index[0]
         seed = df.loc[seed_idx]
+        seed_coord = (seed['Latitude'], seed['Longitude'])
+
         cluster_members = [seed_idx]
         cluster_orders = seed['Orders']
-        cluster_coords = [(seed['Latitude'], seed['Longitude'])]
 
         for idx in unassigned.index[1:]:
             candidate = df.loc[idx]
-            new_coord = (candidate['Latitude'], candidate['Longitude'])
-            temp_coords = cluster_coords + [new_coord]
-            if cluster_orders + candidate['Orders'] <= 230 and is_valid_cluster(temp_coords):
+            candidate_coord = (candidate['Latitude'], candidate['Longitude'])
+            if cluster_orders + candidate['Orders'] <= 230 and is_within_seed_radius(seed_coord, candidate_coord):
                 cluster_members.append(idx)
                 cluster_orders += candidate['Orders']
-                cluster_coords.append(new_coord)
 
         df.loc[cluster_members, 'Cluster'] = cluster_id
         cluster_id += 1
@@ -74,7 +63,11 @@ if uploaded_file is not None:
         total_orders = cluster_df['Orders'].sum()
         coords = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
         distance_km = calculate_route_distance(coords)
-        max_dist_km = max_pairwise_distance(coords)
+
+        # Check max distance from seed to each society
+        seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
+        max_dist_km = max(great_circle(seed_coord, (row['Latitude'], row['Longitude'])).km for _, row in cluster_df.iterrows())
+
         valid_cluster = 190 <= total_orders <= 230 and max_dist_km <= 2.0
 
         for _, row in cluster_df.iterrows():
@@ -91,8 +84,8 @@ if uploaded_file is not None:
             "No. of Societies": len(cluster_df),
             "Total Orders": total_orders,
             "Total Distance (km)": round(distance_km, 2),
-            "Max Pairwise Distance (km)": round(max_dist_km, 2),
-            "Valid Cluster (190–230 Orders & <=2km max dist)": "Yes" if valid_cluster else "No"
+            "Max Distance from Seed (km)": round(max_dist_km, 2),
+            "Valid Cluster (190–230 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No"
         })
 
     # Show map
