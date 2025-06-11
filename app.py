@@ -4,6 +4,7 @@ import numpy as np
 from geopy.distance import great_circle
 import folium
 from streamlit_folium import st_folium
+from folium import PolyLine
 from io import StringIO
 import random
 
@@ -20,9 +21,11 @@ def get_delivery_sequence(cluster_df):
     names = cluster_df['Society'].tolist()
     visited = [False] * len(points)
     sequence = []
+    order = []
 
     current_index = 0
     sequence.append(names[current_index])
+    order.append(points[current_index])
     visited[current_index] = True
 
     for _ in range(1, len(points)):
@@ -37,9 +40,10 @@ def get_delivery_sequence(cluster_df):
                     next_index = i
         visited[next_index] = True
         sequence.append(names[next_index])
+        order.append(points[next_index])
         current_index = next_index
 
-    return sequence
+    return sequence, order
 
 # Check if candidate is within 2km from seed
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
@@ -108,17 +112,17 @@ if uploaded_file is not None:
         valid_cluster = 190 <= total_orders <= 230 and max_dist_km <= 2.0
         color = color_palette[label % len(color_palette)]
 
-        # Save center for navigation
         cluster_centers[label] = seed_coord
 
-        folium.Circle(
-            location=seed_coord,
-            radius=700,  # reduced circle size
-            color=color,
-            fill=True,
-            fill_opacity=0.2,
-            tooltip=f"Cluster {label}"
-        ).add_to(cluster_map)
+        if selected_cluster_id == label:
+            folium.Circle(
+                location=seed_coord,
+                radius=700,
+                color=color,
+                fill=True,
+                fill_opacity=0.3,
+                tooltip=f"Cluster {label}: {total_orders} Orders, {len(cluster_df)} Societies"
+            ).add_to(cluster_map)
 
         for _, row in cluster_df.iterrows():
             folium.Marker(
@@ -128,7 +132,10 @@ if uploaded_file is not None:
                 icon=folium.Icon(color=color, icon='info-sign')
             ).add_to(cluster_map)
 
-        delivery_sequence = get_delivery_sequence(cluster_df)
+        delivery_sequence, route_points = get_delivery_sequence(cluster_df)
+
+        if selected_cluster_id == label and len(route_points) > 1:
+            PolyLine(locations=route_points, color=color, weight=4, opacity=0.8).add_to(cluster_map)
 
         cluster_summary.append({
             "Cluster ID": label,
@@ -142,21 +149,17 @@ if uploaded_file is not None:
             "Delivery Sequence": " → ".join(delivery_sequence)
         })
 
-    # Navigate to selected cluster
     if selected_cluster_id in cluster_centers:
         lat, lon = cluster_centers[selected_cluster_id]
         cluster_map.location = [lat, lon]
         cluster_map.zoom_start = 15
 
-    # Show map
     st.subheader("Cluster Map")
     st_data = st_folium(cluster_map, width=725)
 
-    # Show cluster summary
     summary_df = pd.DataFrame(cluster_summary)
     st.subheader("Cluster Summary")
     st.dataframe(summary_df)
 
-    # Download summary
     csv = summary_df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv")
