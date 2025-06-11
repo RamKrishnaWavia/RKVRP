@@ -1,23 +1,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.cluster import DBSCAN
 from geopy.distance import great_circle
-from shapely.geometry import MultiPoint
 import folium
 from streamlit_folium import st_folium
 from io import StringIO
-
-# Helper function to calculate distance matrix
-def create_distance_matrix(coords):
-    n = len(coords)
-    dist_matrix = np.zeros((n, n))
-    for i in range(n):
-        for j in range(i+1, n):
-            dist = great_circle(coords[i], coords[j]).meters
-            dist_matrix[i][j] = dist
-            dist_matrix[j][i] = dist
-    return dist_matrix
 
 # Helper to calculate route distance
 def calculate_route_distance(route):
@@ -25,6 +12,10 @@ def calculate_route_distance(route):
     for i in range(len(route) - 1):
         distance += great_circle(route[i], route[i+1]).meters
     return distance
+
+# Helper to compute distance in meters
+def is_within_distance(coord1, coord2, max_dist=2000):
+    return great_circle(coord1, coord2).meters <= max_dist
 
 st.title("Milk & Grocery Delivery Clustering Tool")
 
@@ -41,25 +32,41 @@ if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
     st.write("Uploaded Data", df)
 
-    coords = list(zip(df['Latitude'], df['Longitude']))
+    df = df.sort_values(by='Orders', ascending=False).reset_index(drop=True)
+    df['Cluster'] = -1
+    cluster_id = 0
 
-    # DBSCAN clustering with max 2km distance (2000 meters)
-    kms_per_radian = 6371.0088
-    epsilon = 2 / kms_per_radian
+    unassigned = df.copy()
 
-    db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine').fit(np.radians(coords))
-    labels = db.labels_
-    df['Cluster'] = labels
+    while not unassigned.empty:
+        seed = unassigned.iloc[0]
+        seed_coord = (seed['Latitude'], seed['Longitude'])
+        seed_orders = seed['Orders']
+
+        cluster_members = [seed.name]
+        cluster_orders = seed_orders
+
+        for idx, row in unassigned.iloc[1:].iterrows():
+            if cluster_orders >= 230:
+                break
+            coord = (row['Latitude'], row['Longitude'])
+            if all(is_within_distance(coord, (df.loc[i]['Latitude'], df.loc[i]['Longitude'])) for i in cluster_members):
+                if cluster_orders + row['Orders'] <= 230:
+                    cluster_members.append(row.name)
+                    cluster_orders += row['Orders']
+
+        df.loc[cluster_members, 'Cluster'] = cluster_id
+        cluster_id += 1
+        unassigned = df[df['Cluster'] == -1]
 
     cluster_summary = []
     cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=12)
 
-    for label in set(labels):
+    for label in sorted(df['Cluster'].unique()):
         cluster_df = df[df['Cluster'] == label]
         total_orders = cluster_df['Orders'].sum()
-        valid_cluster = 200 <= total_orders <= 220
+        valid_cluster = 190 <= total_orders <= 230
 
-        # Add markers to map
         coords = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
         for _, row in cluster_df.iterrows():
             folium.Marker(
@@ -78,7 +85,7 @@ if uploaded_file is not None:
             "No. of Societies": len(cluster_df),
             "Total Orders": total_orders,
             "Total Distance (m)": round(distance, 2),
-            "Valid Cluster (200-220 Orders)": "Yes" if valid_cluster else "No"
+            "Valid Cluster (190–230 Orders)": "Yes" if valid_cluster else "No"
         })
 
     # Show map
