@@ -108,15 +108,16 @@ if uploaded_file is not None:
         valid_cluster = 190 <= total_orders <= 230 and max_dist_km <= 2.0
         color = color_palette[label % len(color_palette)]
 
-        # Draw semi-transparent cluster circle
-        folium.Circle(
-            location=seed_coord,
-            radius=500,  # smaller
-            color=color,
-            fill=True,
-            fill_opacity=0.05,
-            tooltip=f"Cluster {label}: {total_orders} Orders, {len(cluster_df)} Societies"
-        ).add_to(cluster_map)
+        # Draw circle for each society in the cluster
+        for _, row in cluster_df.iterrows():
+            folium.Circle(
+                location=(row['Latitude'], row['Longitude']),
+                radius=500,
+                color=color,
+                fill=True,
+                fill_opacity=0.1,
+                tooltip=f"Cluster {label}: {total_orders} Orders, {len(cluster_df)} Societies"
+            ).add_to(cluster_map)
 
         # Add markers
         for _, row in cluster_df.iterrows():
