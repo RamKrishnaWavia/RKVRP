@@ -10,12 +10,12 @@ from io import StringIO
 def calculate_route_distance(route):
     distance = 0.0
     for i in range(len(route) - 1):
-        distance += great_circle(route[i], route[i+1]).meters
+        distance += great_circle(route[i], route[i+1]).km
     return distance
 
 # Helper to compute distance in meters
-def is_within_distance(coord1, coord2, max_dist=2000):
-    return great_circle(coord1, coord2).meters <= max_dist
+def is_within_distance(coord1, coord2, max_dist=2.0):
+    return great_circle(coord1, coord2).km <= max_dist
 
 st.title("Milk & Grocery Delivery Clustering Tool")
 
@@ -76,7 +76,7 @@ if uploaded_file is not None:
             ).add_to(cluster_map)
 
         route = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
-        distance = calculate_route_distance(route)
+        distance_km = calculate_route_distance(route)
 
         cluster_summary.append({
             "Cluster": label,
@@ -84,7 +84,7 @@ if uploaded_file is not None:
             "Societies": ", ".join(cluster_df['Society'].tolist()),
             "No. of Societies": len(cluster_df),
             "Total Orders": total_orders,
-            "Total Distance (m)": round(distance, 2),
+            "Total Distance (km)": round(distance_km, 2),
             "Valid Cluster (190–230 Orders)": "Yes" if valid_cluster else "No"
         })
 
