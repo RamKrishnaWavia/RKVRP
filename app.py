@@ -57,27 +57,29 @@ if uploaded_file is not None:
     for label in set(labels):
         cluster_df = df[df['Cluster'] == label]
         total_orders = cluster_df['Orders'].sum()
-        if 200 <= total_orders <= 220:
-            # Add markers to map
-            coords = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
-            for _, row in cluster_df.iterrows():
-                folium.Marker(
-                    location=[row['Latitude'], row['Longitude']],
-                    popup=f"{row['Society']} ({row['Orders']} orders)",
-                    icon=folium.Icon(color='blue', icon='info-sign')
-                ).add_to(cluster_map)
+        valid_cluster = 200 <= total_orders <= 220
 
-            route = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
-            distance = calculate_route_distance(route)
+        # Add markers to map
+        coords = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
+        for _, row in cluster_df.iterrows():
+            folium.Marker(
+                location=[row['Latitude'], row['Longitude']],
+                popup=f"{row['Society']} ({row['Orders']} orders)",
+                icon=folium.Icon(color='blue', icon='info-sign')
+            ).add_to(cluster_map)
 
-            cluster_summary.append({
-                "Cluster": label,
-                "Society IDs": ", ".join(cluster_df['Society ID'].astype(str).tolist()),
-                "Societies": ", ".join(cluster_df['Society'].tolist()),
-                "No. of Societies": len(cluster_df),
-                "Total Orders": total_orders,
-                "Total Distance (m)": round(distance, 2)
-            })
+        route = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
+        distance = calculate_route_distance(route)
+
+        cluster_summary.append({
+            "Cluster": label,
+            "Society IDs": ", ".join(cluster_df['Society ID'].astype(str).tolist()),
+            "Societies": ", ".join(cluster_df['Society'].tolist()),
+            "No. of Societies": len(cluster_df),
+            "Total Orders": total_orders,
+            "Total Distance (m)": round(distance, 2),
+            "Valid Cluster (200-220 Orders)": "Yes" if valid_cluster else "No"
+        })
 
     # Show map
     st.subheader("Cluster Map")
