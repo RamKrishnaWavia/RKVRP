@@ -137,6 +137,8 @@ if uploaded_file is not None:
 ])}
         color = cluster_color_map[label]
 
+        delivery_sequence, route_points = get_delivery_sequence(cluster_df)
+
         # Draw circle for each society in the cluster
         for _, row in cluster_df.iterrows():
             folium.Circle(
