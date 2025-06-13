@@ -110,13 +110,8 @@ if uploaded_file is not None:
     cluster_id_map = {label: cid for label, cid in zip(cluster_labels, sorted(cluster_counts.keys()))}
     selected_label = st.sidebar.selectbox("Select Cluster ID to View Map", options=["All"] + cluster_labels)
     selected_cluster = "All" if selected_label == "All" else cluster_id_map[selected_label]
-
-    cluster_summary = []
-
-# Draw main map only once before looping through clusters
-st.subheader("Overall Cluster Map")
-# Show cluster-wise summary when a specific cluster is selected
-if selected_cluster != "All":
+    # Show cluster-wise summary when a specific cluster is selected
+    if selected_cluster != "All":
     filtered_summary = [c for c in cluster_summary if c['Cluster ID'] == selected_cluster]
     if filtered_summary:
         cluster_info = filtered_summary[0]
@@ -127,6 +122,11 @@ if selected_cluster != "All":
         st.markdown(f"- **DC to First Society (km):** {cluster_info['DC to First Society (km)']:.2f}")
         st.markdown(f"- **Total Distance via DC (km):** {cluster_info['Total Distance via DC (km)']:.2f}")
         st.markdown(f"- **Round Trip Distance (DC → Cluster → DC):** {cluster_info['Round Trip Distance (DC → Cluster → DC) (km)']:.2f}")
+
+    cluster_summary = []
+
+# Draw main map only once before looping through clusters
+st.subheader("Overall Cluster Map")
 
 # Initialize and build the main map before this line
 cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
