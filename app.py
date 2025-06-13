@@ -172,8 +172,8 @@ if uploaded_file is not None:
             "Estimated Timings": " → ".join(delivery_timings)
         })
 
-    st.subheader("Overall Cluster Map")
-st_data = st_folium(cluster_map, width=725)
+        st.subheader("Overall Cluster Map")
+    st_data = st_folium(cluster_map, width=725)
 
 # Individual maps for each cluster
 st.subheader("Individual Cluster Maps")
