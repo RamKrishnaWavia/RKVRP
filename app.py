@@ -109,7 +109,7 @@ if uploaded_file is not None:
     cluster_labels = [f"Cluster {cid} ({cluster_counts[cid]} societies)" for cid in sorted(cluster_counts.keys())]
     cluster_id_map = {label: cid for label, cid in zip(cluster_labels, sorted(cluster_counts.keys()))}
     selected_label = st.sidebar.selectbox("Select Cluster ID to View Map", options=["All"] + cluster_labels)
-    selected_cluster = "All" if selected_label == "All" else cluster_id_map[selected_label]
+    # selected_cluster = "All" if selected_label == "All" else cluster_id_map[selected_label]
 
     cluster_summary = []
 
@@ -117,6 +117,10 @@ if uploaded_file is not None:
 st.subheader("Overall Cluster Map")
 # Initialize and build the main map before this line
 selected_cluster = "All" if selected_label == "All" else cluster_id_map[selected_label]
+selected_label = st.sidebar.selectbox("Select Cluster ID to View Map", options=["All"] + cluster_labels)
+# selected_cluster = "All" if selected_label == "All" else cluster_id_map[selected_label]
+cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
+
 cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
 cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=12)
 st_data = st_folium(cluster_map, width=725)
