@@ -110,7 +110,7 @@ if uploaded_file is not None:
     ]
 
     cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
-    for label in sorted(cluster_filter):
+        for label in sorted(cluster_filter):
         cluster_df = df[df['Cluster'] == label]
         if cluster_df.empty:
             continue
@@ -191,7 +191,7 @@ if uploaded_file is not None:
             "Single Society Cluster": "Yes" if len(cluster_df) == 1 else "No"
         })
 
-        st.subheader("Overall Cluster Map")
+        
     st_data = st_folium(cluster_map, width=725)
 
     # Individual maps for each cluster
@@ -255,7 +255,14 @@ if uploaded_file is not None:
                 fill_opacity=1
             ).add_to(individual_map)
 
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        total_orders = cluster_df['Orders'].sum()
+        total_distance = calculate_route_distance(list(zip(cluster_df['Latitude'], cluster_df['Longitude'])))
         st.markdown(f"### Cluster {label} Map")
+        max_leg_distance = 0.0
+        if len(route_points) > 1:
+            max_leg_distance = max(great_circle(route_points[i], route_points[i+1]).km for i in range(len(route_points)-1))
+        st.markdown(f"**Total Orders:** {total_orders} | **Total Distance:** {total_distance:.2f} km | **No. of Societies:** {len(cluster_df)} | **Max Leg Distance:** {max_leg_distance:.2f} km")
         st_folium(individual_map, width=725)
 
     summary_df = pd.DataFrame(cluster_summary)
