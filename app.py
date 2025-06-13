@@ -112,15 +112,12 @@ if uploaded_file is not None:
     selected_cluster = "All" if selected_label == "All" else cluster_id_map[selected_label]
 
     cluster_summary = []
-    cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=12)
 
-    color_palette = [
-        "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen",
-        "cadetblue", "pink", "gray", "black", "teal"
-    ]
+# Draw main map only once before looping through clusters
+st.subheader("Overall Cluster Map")
+st_data = st_folium(cluster_map, width=725)
 
-    cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
-    for label in sorted(cluster_filter):
+for label in sorted(cluster_filter):
         cluster_df = df[df['Cluster'] == label]
         if cluster_df.empty:
             continue
@@ -203,7 +200,7 @@ if uploaded_file is not None:
             "Total Distance via DC to last point (km)": round(great_circle(supply_source, route_points[0]).km + distance_km, 2) if supply_source and route_points else round(distance_km, 2),
             "Round Trip Distance (DC → Cluster → DC) (km)": round(great_circle(supply_source, route_points[0]).km + distance_km + great_circle(route_points[-1], supply_source).km, 2) if supply_source and route_points else round(distance_km, 2)
         })
-        st_data = st_folium(cluster_map, width=725)
+        
 
     # Individual maps for each cluster
     st.subheader("Individual Cluster Maps")
