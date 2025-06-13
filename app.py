@@ -131,7 +131,7 @@ if uploaded_file is not None:
         est_route_distance = calculate_route_distance([(source_lat, source_long)] + route)
         first_to_last_distance = calculate_distance_km(route[0][0], route[0][1], route[-1][0], route[-1][1]) if len(route) >= 2 else 0.0
         valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
-        delivery_path = " -> ".join(sequence)
+        delivery_path = " -> ".join([f"S{i+1}: {name}" for i, name in enumerate(sequence)])
         cost_per_order = round((van_cost + cee_cost) / total_orders, 2)
 
         cluster_summary.append({
