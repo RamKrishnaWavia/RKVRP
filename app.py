@@ -34,11 +34,12 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
     points = cluster_df[['Latitude', 'Longitude']].values.tolist()
     names = cluster_df['Society'].tolist()
     if len(points) <= 1:
-        return names, points, []
+        return names, points, [], []
     visited = [False] * len(points)
     sequence = []
     order = []
     distances = []
+    inefficiencies = []
     current_index = 0  # Start from the first society
     current_point = points[current_index]
     visited[current_index] = True
@@ -58,14 +59,15 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
         if next_index == -1:
             break
         visited[next_index] = True
-        sequence.append(f"{names[next_index]} ({min_dist} km)")
+        inefficiency_flag = " 🚩" if min_dist > 1.5 else ""
+        sequence.append(f"{names[next_index]} ({min_dist} km){inefficiency_flag}")
         distances.append(min_dist)
         current_point = points[next_index]
         order.append(current_point)
 
     total_seq_distance = round(sum(distances), 2)
     sequence.append(f"Total Distance: {total_seq_distance} km")
-    return sequence, order, distances
+    return sequence, order, distances, inefficiencies
 
 # Check if candidate is within 2km from seed
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
@@ -120,9 +122,8 @@ if uploaded_file is not None:
                 if cluster_orders + candidate['Orders'] <= 220 and is_within_seed_radius(seed_coord, candidate_coord):
                     cluster_members.append(idx)
                     cluster_orders += candidate['Orders']
-            if cluster_orders >= 180:
-                df.loc[cluster_members, 'Cluster'] = cluster_id
-                cluster_id += 1
+            df.loc[cluster_members, 'Cluster'] = cluster_id
+            cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
         if attempt == max_attempts:
             st.warning(f"Cluster creation hit max attempts for Hub ID {hub}. Remaining unassigned societies may exist.")
@@ -138,13 +139,13 @@ if uploaded_file is not None:
         total_orders = cluster_df['Orders'].sum()
         seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
         max_dist = max(calculate_distance_km(seed_coord[0], seed_coord[1], row['Latitude'], row['Longitude']) for _, row in cluster_df.iterrows())
-        sequence, route, _ = get_delivery_sequence(cluster_df, source_lat, source_long)
+        sequence, route, _, _ = get_delivery_sequence(cluster_df, source_lat, source_long)
         full_route = [(source_lat, source_long)] + route + [(source_lat, source_long)]
         total_distance = calculate_route_distance(full_route)
         est_route_distance = calculate_route_distance([(source_lat, source_long)] + route)
         first_to_last_distance = calculate_distance_km(route[0][0], route[0][1], route[-1][0], route[-1][1]) if len(route) >= 2 else 0.0
         total_society_distance = calculate_route_distance(route)
-        valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
+        valid_cluster = "Yes" if 180 <= total_orders <= 220 and max_dist <= 2.0 else "No"
         delivery_path = " -> ".join(sequence)
         cost_per_order = round((van_cost + cee_cost) / total_orders, 2)
 
@@ -173,9 +174,8 @@ if uploaded_file is not None:
 
     selected_cluster_df = df[df['Cluster'] == selected_cluster_id]
     selected_summary = cluster_summary_df[cluster_summary_df['Cluster ID'] == selected_cluster_id]
-    sequence, route, distances = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
+    sequence, route, distances, _ = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
 
-    # Show cluster metrics
     st.subheader("Cluster Details Summary")
     for col, val in selected_summary.iloc[0].items():
         st.markdown(f"**{col}**: {val}")
@@ -199,6 +199,5 @@ if uploaded_file is not None:
     st.subheader("Cluster Summary Table")
     st.dataframe(selected_summary)
 
-    # Export to CSV
     csv = cluster_summary_df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv", mime='text/csv')
