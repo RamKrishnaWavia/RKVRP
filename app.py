@@ -108,6 +108,8 @@ if uploaded_file is not None:
     cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
     for label in sorted(cluster_filter):
         cluster_df = df[df['Cluster'] == label]
+        if cluster_df.empty:
+            continue
         total_orders = cluster_df['Orders'].sum()
         coords = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
         distance_km = calculate_route_distance(coords)
@@ -172,6 +174,8 @@ if uploaded_file is not None:
     st.subheader("Individual Cluster Maps")
     for label in sorted(df['Cluster'].unique()):
         cluster_df = df[df['Cluster'] == label]
+        if cluster_df.empty:
+            continue
         cluster_center = [cluster_df['Latitude'].mean(), cluster_df['Longitude'].mean()]
         individual_map = folium.Map(location=cluster_center, zoom_start=14)
 
