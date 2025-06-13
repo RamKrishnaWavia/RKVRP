@@ -116,6 +116,7 @@ if uploaded_file is not None:
 # Draw main map only once before looping through clusters
 st.subheader("Overall Cluster Map")
 # Initialize and build the main map before this line
+selected_cluster = "All" if selected_label == "All" else cluster_id_map[selected_label]
 cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
 cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=12)
 st_data = st_folium(cluster_map, width=725)
