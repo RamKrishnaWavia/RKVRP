@@ -181,4 +181,9 @@ if uploaded_file is not None:
         st.markdown(" → ".join(distance_path))
 
     st.subheader("Cluster Summary")
-    st.dataframe(pd.DataFrame(cluster_summary))
+    summary_df = pd.DataFrame(cluster_summary)
+    st.dataframe(summary_df)
+    
+    # Export to CSV
+    csv = summary_df.to_csv(index=False).encode('utf-8')
+    st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv", mime='text/csv')
