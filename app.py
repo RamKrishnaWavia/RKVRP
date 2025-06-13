@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from geopy.distance import great_circle
+from math import radians, sin, cos, sqrt, atan2
 import folium
 from streamlit_folium import st_folium
 from folium import PolyLine
@@ -16,9 +16,21 @@ def calculate_route_distance(route):
         distance += calculate_distance_km(route[i][0], route[i][1], route[i+1][0], route[i+1][1])
     return distance
 
-# Helper to calculate distance between two lat/long points
+# Helper to calculate distance between two lat/long points using Haversine formula
 def calculate_distance_km(lat1, lon1, lat2, lon2):
-    return round(great_circle((lat1, lon1), (lat2, lon2)).km, 2)
+    R = 6371.0  # Radius of Earth in kilometers
+    lat1_rad = radians(lat1)
+    lon1_rad = radians(lon1)
+    lat2_rad = radians(lat2)
+    lon2_rad = radians(lon2)
+
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+
+    a = sin(dlat / 2)**2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    distance = R * c
+    return round(distance, 2)
 
 # Optimized delivery sequence from depot using nearest neighbor heuristic
 def get_delivery_sequence(cluster_df, depot_lat, depot_long):
