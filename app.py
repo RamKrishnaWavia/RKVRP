@@ -162,6 +162,11 @@ if uploaded_file is not None:
     selected_summary = cluster_summary_df[cluster_summary_df['Cluster ID'] == selected_cluster_id]
     sequence, route = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
 
+    # Show cluster metrics
+    st.subheader("Cluster Details Summary")
+    for col, val in selected_summary.iloc[0].items():
+        st.markdown(f"**{col}**: {val}")
+
     st.subheader(f"Map for Cluster {selected_cluster_id}")
     cluster_map = folium.Map(location=[source_lat, source_long], zoom_start=13)
     folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(cluster_map)
@@ -178,7 +183,7 @@ if uploaded_file is not None:
     PolyLine([(source_lat, source_long)] + route + [(source_lat, source_long)], color="blue", weight=2.5, opacity=1).add_to(cluster_map)
     st_folium(cluster_map, width=700, height=500)
 
-    st.subheader("Cluster Details")
+    st.subheader("Cluster Summary Table")
     st.dataframe(selected_summary)
 
     # Export to CSV
