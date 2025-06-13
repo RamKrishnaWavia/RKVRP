@@ -67,7 +67,7 @@ st.title("Milk & Grocery Delivery Clustering Tool")
 
 # Template file download
 st.subheader("Download Template")
-template = pd.DataFrame({"Society ID": [], "Society": [], "Latitude": [], "Longitude": [], "Orders": []})
+template = pd.DataFrame({"Society ID": [], "Society": [], "Latitude": [], "Longitude": [], "Orders": [], "Hub ID": []})
 st.download_button("Download Template CSV", data=template.to_csv(index=False), file_name="society_template.csv")
 
 # File upload
@@ -199,18 +199,14 @@ if uploaded_file is not None:
             if i == 0:
                 folium.Marker(
                     location=[row['Latitude'], row['Longitude']],
-                    popup=f"{row['Society']}
-Orders: {row['Orders']}
-Cluster ID: {label} (Seed)",
+                    popup=f"{row['Society']}\nOrders: {row['Orders']}\nCluster ID: {label} (Seed)",
                     tooltip=f"SEED: {row['Society']} ({row['Orders']} orders) - Cluster {label}",
                     icon=folium.Icon(color="darkpurple", icon='star')
                 ).add_to(individual_map)
             else:
                 folium.Marker(
                     location=[row['Latitude'], row['Longitude']],
-                    popup=f"{row['Society']}
-Orders: {row['Orders']}
-Cluster ID: {label}",
+                    popup=f"{row['Society']}\nOrders: {row['Orders']}\nCluster ID: {label}",
                     tooltip=f"{row['Society']} ({row['Orders']} orders) - Cluster {label}",
                     icon=folium.Icon(color=color, icon='info-sign')
                 ).add_to(individual_map)
