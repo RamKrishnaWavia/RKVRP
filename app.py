@@ -113,7 +113,7 @@ if uploaded_file is not None:
     # Show cluster-wise summary when a specific cluster is selected
     if selected_cluster != "All":
         filtered_summary = [c for c in cluster_summary if c['Cluster ID'] == selected_cluster]
-        if filtered_summary:
+    if filtered_summary:
         cluster_info = filtered_summary[0]
         st.markdown("### Cluster Summary")
         st.markdown(f"- **Total Orders:** {cluster_info['Total Orders']}")
