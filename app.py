@@ -16,8 +16,8 @@ def calculate_route_distance(route):
         distance += great_circle(route[i], route[i+1]).km
     return distance
 
-# Helper to create delivery sequence using nearest neighbor heuristic
-def get_delivery_sequence(cluster_df):
+# Optimized delivery sequence from depot using nearest neighbor heuristic
+def get_delivery_sequence(cluster_df, depot_lat, depot_long):
     points = cluster_df[['Latitude', 'Longitude']].values.tolist()
     names = cluster_df['Society'].tolist()
 
@@ -28,25 +28,21 @@ def get_delivery_sequence(cluster_df):
     sequence = []
     order = []
 
-    current_index = 0
-    sequence.append(names[current_index])
-    order.append(points[current_index])
-    visited[current_index] = True
+    current_point = (depot_lat, depot_long)
 
-    for _ in range(1, len(points)):
-        last_point = points[current_index]
+    for _ in range(len(points)):
         min_dist = float('inf')
         next_index = -1
         for i in range(len(points)):
             if not visited[i]:
-                dist = great_circle(last_point, points[i]).km
+                dist = great_circle(current_point, points[i]).km
                 if dist < min_dist:
                     min_dist = dist
                     next_index = i
         visited[next_index] = True
         sequence.append(names[next_index])
         order.append(points[next_index])
-        current_index = next_index
+        current_point = points[next_index]
 
     return sequence, order
 
@@ -62,6 +58,11 @@ def_lat = 12.989708618922553
 def_long = 77.78625342251868
 source_lat = st.sidebar.number_input("Depot Latitude", value=def_lat, format="%.8f")
 source_long = st.sidebar.number_input("Depot Longitude", value=def_long, format="%.8f")
+
+# Sidebar cost settings
+st.sidebar.subheader("Cost Settings")
+van_cost = st.sidebar.number_input("Van Cost (₹)", value=834, step=1)
+cee_cost = st.sidebar.number_input("CEE Cost (₹)", value=333, step=1)
 
 # Template file download
 st.subheader("Download Template")
@@ -113,11 +114,12 @@ if uploaded_file is not None:
         total_orders = cluster_df['Orders'].sum()
         seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
         max_dist = max(great_circle(seed_coord, (row['Latitude'], row['Longitude'])).km for _, row in cluster_df.iterrows())
-        sequence, route = get_delivery_sequence(cluster_df)
-        total_distance = calculate_route_distance([(source_lat, source_long)] + route)
+        sequence, route = get_delivery_sequence(cluster_df, source_lat, source_long)
+        full_route = [(source_lat, source_long)] + route + [(source_lat, source_long)]
+        total_distance = calculate_route_distance(full_route)
         valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
         delivery_path = " -> ".join(sequence)
-        cost_per_order = round((35000 / total_orders), 2)
+        cost_per_order = round((van_cost + cee_cost) / total_orders, 2)
 
         cluster_summary.append({
             "Cluster ID": cluster,
@@ -150,7 +152,7 @@ if uploaded_file is not None:
             ).add_to(m)
     else:
         cluster_df = df[df['Cluster'] == selected_cluster]
-        sequence, route = get_delivery_sequence(cluster_df)
+        sequence, route = get_delivery_sequence(cluster_df, source_lat, source_long)
         m = folium.Map(location=[cluster_df['Latitude'].mean(), cluster_df['Longitude'].mean()], zoom_start=13)
 
         society_names_line = " -> ".join(sequence)
@@ -162,7 +164,7 @@ if uploaded_file is not None:
             icon=folium.Icon(color="red", icon="home")
         ).add_to(m)
 
-        full_route = [(source_lat, source_long)] + route
+        full_route = [(source_lat, source_long)] + route + [(source_lat, source_long)]
 
         for idx, point in enumerate(full_route):
             if idx < len(full_route) - 1:
@@ -186,12 +188,12 @@ if uploaded_file is not None:
             ).add_to(m)
 
         total_orders = cluster_df['Orders'].sum()
-        cost_per_order = round((35000 / total_orders), 2)
+        cost_per_order = round((van_cost + cee_cost) / total_orders, 2)
 
         st.subheader(f"Delivery Summary for Cluster {selected_cluster}")
         st.write(f"Total Orders: {total_orders}")
         st.write(f"Total Societies: {len(cluster_df)}")
-        st.write(f"Estimated Route Distance: {calculate_route_distance(full_route):.2f} km")
+        st.write(f"Estimated Route Distance (including return): {calculate_route_distance(full_route):.2f} km")
         st.write(f"Cost Per Order: ₹{cost_per_order}")
 
     st_data = st_folium(m, width=800, height=500)
