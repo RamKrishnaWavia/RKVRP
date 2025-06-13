@@ -117,6 +117,7 @@ if uploaded_file is not None:
         total_distance = calculate_route_distance([(source_lat, source_long)] + route)
         valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
         delivery_path = " -> ".join(sequence)
+        cost_per_order = round((35000 / total_orders), 2)
 
         cluster_summary.append({
             "Cluster ID": cluster,
@@ -128,7 +129,8 @@ if uploaded_file is not None:
             "Total Distance (km)": round(total_distance, 2),
             "Max Distance from Seed (km)": round(max_dist, 2),
             "Valid Cluster (180 to 220 Orders & <2km)": valid_cluster,
-            "Delivery Sequence": delivery_path
+            "Delivery Sequence": delivery_path,
+            "Cost Per Order (₹)": cost_per_order
         })
 
     cluster_counts = df.groupby('Cluster').size().to_dict()
@@ -180,10 +182,14 @@ if uploaded_file is not None:
                 icon=folium.Icon(color="green", icon="info-sign")
             ).add_to(m)
 
+        total_orders = cluster_df['Orders'].sum()
+        cost_per_order = round((35000 / total_orders), 2)
+
         st.subheader(f"Delivery Summary for Cluster {selected_cluster}")
-        st.write(f"Total Orders: {cluster_df['Orders'].sum()}")
+        st.write(f"Total Orders: {total_orders}")
         st.write(f"Total Societies: {len(cluster_df)}")
         st.write(f"Estimated Route Distance: {calculate_route_distance(full_route):.2f} km")
+        st.write(f"Cost Per Order: ₹{cost_per_order}")
 
     st_data = st_folium(m, width=800, height=500)
 
