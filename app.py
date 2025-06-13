@@ -101,6 +101,34 @@ if uploaded_file is not None:
             cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
 
+    cluster_summary = []
+
+    for cluster in sorted(df['Cluster'].unique()):
+        cluster_df = df[df['Cluster'] == cluster]
+        hub_id = cluster_df['Hub ID'].iloc[0]
+        society_ids = list(cluster_df['Society ID'])
+        societies = list(cluster_df['Society'])
+        num_societies = len(cluster_df)
+        total_orders = cluster_df['Orders'].sum()
+        seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
+        max_dist = max(great_circle(seed_coord, (row['Latitude'], row['Longitude'])).km for _, row in cluster_df.iterrows())
+        sequence, route = get_delivery_sequence(cluster_df)
+        total_distance = calculate_route_distance([(source_lat, source_long)] + route)
+        valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
+
+        cluster_summary.append({
+            "Cluster ID": cluster,
+            "Hub ID": hub_id,
+            "Society IDs": ", ".join(map(str, society_ids)),
+            "Societies": ", ".join(societies),
+            "No. of Societies": num_societies,
+            "Total Orders": total_orders,
+            "Total Distance (km)": round(total_distance, 2),
+            "Max Distance from Seed (km)": round(max_dist, 2),
+            "Valid Cluster (180 to 220 Orders & <2km)": valid_cluster,
+            "Delivery Sequence": ", ".join(sequence)
+        })
+
     cluster_counts = df.groupby('Cluster').size().to_dict()
     cluster_labels = [f"Cluster {cid} ({cluster_counts[cid]} societies)" for cid in sorted(cluster_counts.keys())]
     cluster_id_map = {label: cid for label, cid in zip(cluster_labels, sorted(cluster_counts.keys()))}
@@ -141,3 +169,8 @@ if uploaded_file is not None:
         st.write(f"Estimated Route Distance: {calculate_route_distance([(source_lat, source_long)] + route):.2f} km")
 
     st_data = st_folium(m, width=800, height=500)
+
+    st.subheader("Cluster Summary Table")
+    summary_df = pd.DataFrame(cluster_summary)
+    st.dataframe(summary_df)
+    st.download_button("Download Cluster Summary CSV", data=summary_df.to_csv(index=False), file_name="cluster_summary.csv")
