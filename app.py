@@ -121,53 +121,54 @@ cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()
 st_data = st_folium(cluster_map, width=725)
 
 for label in sorted(cluster_filter):
-        cluster_df = df[df['Cluster'] == label]
-        if cluster_df.empty:
-            continue
-        total_orders = cluster_df['Orders'].sum()
-        coords = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
-        distance_km = calculate_route_distance(coords)
+    cluster_df = df[df['Cluster'] == label]
+    if cluster_df.empty:
+        continue
+    total_orders = cluster_df['Orders'].sum()
+    coords = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
+    distance_km = calculate_route_distance(coords)
 
-        # Seed info
-        seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
-        max_dist_km = max(great_circle(seed_coord, (row['Latitude'], row['Longitude'])).km for _, row in cluster_df.iterrows())
+    # Seed info
+    seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
+    max_dist_km = max(great_circle(seed_coord, (row['Latitude'], row['Longitude'])).km for _, row in cluster_df.iterrows())
 
-        valid_cluster = 180 <= total_orders <= 220 and max_dist_km <= 2.0
-        hub_color_map = {hub: color_palette[i % len(color_palette)] for i, hub in enumerate(df['Hub ID'].unique())}
-        cluster_color_map = {cid: color for cid, color in zip(df['Cluster'].unique(), [
-    "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen",
-    "cadetblue", "pink", "gray", "black", "teal", "lightblue", "lightgreen", "beige", "brown"
-])}
-        color = cluster_color_map[label]
+    valid_cluster = 180 <= total_orders <= 220 and max_dist_km <= 2.0
+    hub_color_map = {hub: color_palette[i % len(color_palette)] for i, hub in enumerate(df['Hub ID'].unique())}
+    cluster_color_map = {cid: color for cid, color in zip(df['Cluster'].unique(), [
+        "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen",
+        "cadetblue", "pink", "gray", "black", "teal", "lightblue", "lightgreen", "beige", "brown"
+    ])}
+    color = cluster_color_map[label]
 
-        delivery_sequence, route_points = get_delivery_sequence(cluster_df, supply_source)
+    delivery_sequence, route_points = get_delivery_sequence(cluster_df, supply_source)
 
-        # Draw circle for each society in the cluster
-        for _, row in cluster_df.iterrows():
-            folium.Circle(
-                location=(row['Latitude'], row['Longitude']),
-                radius=500,
-                color=color,
-                fill=True,
-                fill_opacity=0.1,
-                tooltip=f"Cluster {label}: {total_orders} Orders, {len(cluster_df)} Societies"
-            ).add_to(cluster_map)
+    # Draw circle for each society in the cluster
+    for _, row in cluster_df.iterrows():
+        folium.Circle(
+            location=(row['Latitude'], row['Longitude']),
+            radius=500,
+            color=color,
+            fill=True,
+            fill_opacity=0.1,
+            tooltip=f"Cluster {label}: {total_orders} Orders, {len(cluster_df)} Societies"
+        ).add_to(cluster_map)
 
-        # Add numbered markers based on delivery sequence
-        for idx, (point, society_name) in enumerate(zip(route_points, delivery_sequence)):
-            marker_label = f"{idx+1}: {society_name}"
-            folium.Marker(
-                location=point,
-                popup=f"{marker_label}\nCluster ID: {label}",
-                tooltip=marker_label,
-                icon=folium.DivIcon(html=f'<div style="font-size:12px; color:{color}; font-weight:bold">{idx+1}</div>')
-            ).add_to(cluster_map)
+    # Add numbered markers based on delivery sequence
+    for idx, (point, society_name) in enumerate(zip(route_points, delivery_sequence)):
+        marker_label = f"{idx+1}: {society_name}"
+        folium.Marker(
+            location=point,
+            popup=f"{marker_label}
+Cluster ID: {label}",
+            tooltip=marker_label,
+            icon=folium.DivIcon(html=f'<div style="font-size:12px; color:{color}; font-weight:bold">{idx+1}</div>')
+        ).add_to(cluster_map)
 
-        if len(route_points) > 1:
-            for i in range(len(route_points) - 1):
-                dist = great_circle(route_points[i], route_points[i+1]).km
-                mid_point = [(route_points[i][0] + route_points[i+1][0]) / 2, (route_points[i][1] + route_points[i+1][1]) / 2]
-                folium.plugins.AntPath(
+    if len(route_points) > 1:
+        for i in range(len(route_points) - 1):
+            dist = great_circle(route_points[i], route_points[i+1]).km
+            mid_point = [(route_points[i][0] + route_points[i+1][0]) / 2, (route_points[i][1] + route_points[i+1][1]) / 2]
+            folium.plugins.AntPath(
                 locations=[route_points[i], route_points[i+1]],
                 color=color,
                 weight=4,
@@ -185,24 +186,27 @@ for label in sorted(cluster_filter):
                 fill_opacity=1
             ).add_to(cluster_map)
 
-        cluster_name = str(label)
+    cluster_name = str(label)
 
-        cluster_summary.append({
-            "Cluster ID": label,
-            "Hub ID": cluster_df['Hub ID'].iloc[0],
-            "Society IDs": ", ".join(cluster_df['Society ID'].astype(str).tolist()),
-            "Societies": ", ".join(cluster_df['Society'].tolist()),
-            "No. of Societies": len(cluster_df),
-            "Total Orders": total_orders,
-            "Total Distance (km)": round(distance_km, 2),
-            "Max Distance from Seed (km)": round(max_dist_km, 2),
-            "Valid Cluster (180–220 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No",
-            "Delivery Sequence": " → ".join(delivery_sequence),
-            "Single Society Cluster": "Yes" if len(cluster_df) == 1 else "No",
-            "DC to First Society (km)": round(great_circle(supply_source, route_points[0]).km, 2) if supply_source and route_points else 0.0,
-            "Total Distance via DC to last point (km)": round(great_circle(supply_source, route_points[0]).km + distance_km, 2) if supply_source and route_points else round(distance_km, 2),
-            "Round Trip Distance (DC → Cluster → DC) (km)": round(great_circle(supply_source, route_points[0]).km + distance_km + great_circle(route_points[-1], supply_source).km, 2) if supply_source and route_points else round(distance_km, 2)
-        })
+    cluster_summary.append({
+        "Cluster ID": label,
+        "Hub ID": cluster_df['Hub ID'].iloc[0],
+        "Society IDs": ", ".join(cluster_df['Society ID'].astype(str).tolist()),
+        "Societies": ", ".join(cluster_df['Society'].tolist()),
+        "No. of Societies": len(cluster_df),
+        "Total Orders": total_orders,
+        "Total Distance (km)": round(distance_km, 2),
+        "Max Distance from Seed (km)": round(max_dist_km, 2),
+        "Valid Cluster (180–220 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No",
+        "Delivery Sequence": " → ".join(delivery_sequence),
+        "Single Society Cluster": "Yes" if len(cluster_df) == 1 else "No",
+        "DC to First Society (km)": round(great_circle(supply_source, route_points[0]).km, 2) if supply_source and route_points else 0.0,
+        "Total Distance via DC to last point (km)": round(great_circle(supply_source, route_points[0]).km + distance_km, 2) if supply_source and route_points else round(distance_km, 2),
+        "Round Trip Distance (DC → Cluster → DC) (km)": round(great_circle(supply_source, route_points[0]).km + distance_km + great_circle(route_points[-1], supply_source).km, 2) if supply_source and route_points else round(distance_km, 2)
+    })
+
+# Individual maps for each cluster
+st.subheader("Individual Cluster Maps")
         
 
     # Individual maps for each cluster
