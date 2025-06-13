@@ -45,19 +45,6 @@ def get_delivery_sequence(cluster_df):
 
         return sequence, order
 
-def estimate_timings(route_points, start_time="03:30"):
-    from datetime import datetime, timedelta
-    timings = []
-    current_time = datetime.strptime(start_time, "%H:%M")
-    timings.append(current_time.strftime("%H:%M"))
-    for i in range(1, len(route_points)):
-        dist = great_circle(route_points[i-1], route_points[i]).km
-        # Use bike speed between societies (20 km/h)
-        speed_kmph = 20.0
-        minutes = (dist / speed_kmph) * 60
-        current_time += timedelta(minutes=minutes)
-        timings.append(current_time.strftime("%H:%M"))
-    return timings
 
 # Check if candidate is within 2km from seed
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
@@ -175,8 +162,7 @@ if uploaded_file is not None:
             "Total Distance (km)": round(distance_km, 2),
             "Max Distance from Seed (km)": round(max_dist_km, 2),
             "Valid Cluster (180–220 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No",
-            "Delivery Sequence": " → ".join(delivery_sequence),
-            "Estimated Timings": " → ".join(delivery_timings)
+            "Delivery Sequence": " → ".join(delivery_sequence)
         })
 
         st.subheader("Overall Cluster Map")
