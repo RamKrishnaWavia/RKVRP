@@ -29,7 +29,7 @@ def calculate_distance_km(lat1, lon1, lat2, lon2):
     c = 2 * atan2(sqrt(a), sqrt(1 - a))
     return round(R * c, 2)
 
-# Optimized delivery sequence from depot using nearest neighbor heuristic
+# Optimized delivery sequence from first society using nearest neighbor heuristic
 def get_delivery_sequence(cluster_df, depot_lat, depot_long):
     points = cluster_df[['Latitude', 'Longitude']].values.tolist()
     names = cluster_df['Society'].tolist()
@@ -39,8 +39,14 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
     sequence = []
     order = []
     distances = []
-    current_point = (depot_lat, depot_long)
-    for _ in range(len(points)):
+    current_index = 0  # Start from the first society
+    current_point = points[current_index]
+    visited[current_index] = True
+    sequence.append(f"{names[current_index]} (0 km)")
+    order.append(current_point)
+    distances.append(0)
+
+    for _ in range(len(points) - 1):
         min_dist = float('inf')
         next_index = -1
         for i in range(len(points)):
@@ -49,11 +55,13 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
                 if dist < min_dist:
                     min_dist = dist
                     next_index = i
+        if next_index == -1:
+            break
         visited[next_index] = True
         sequence.append(f"{names[next_index]} ({min_dist} km)")
         distances.append(min_dist)
-        order.append(points[next_index])
         current_point = points[next_index]
+        order.append(current_point)
     return sequence, order, distances
 
 # Check if candidate is within 2km from seed
