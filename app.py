@@ -130,8 +130,9 @@ if uploaded_file is not None:
         total_distance = calculate_route_distance(full_route)
         est_route_distance = calculate_route_distance([(source_lat, source_long)] + route)
         first_to_last_distance = calculate_distance_km(route[0][0], route[0][1], route[-1][0], route[-1][1]) if len(route) >= 2 else 0.0
+        total_society_distance = calculate_route_distance(route)
         valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
-        delivery_path = " -> ".join([f"S{i+1}: {name}" for i, name in enumerate(sequence)])
+        delivery_path = " -> ".join(sequence)
         cost_per_order = round((van_cost + cee_cost) / total_orders, 2)
 
         cluster_summary.append({
@@ -144,6 +145,7 @@ if uploaded_file is not None:
             "Total Distance (km) incl. return": round(total_distance, 2),
             "Est. Route Distance (no return, km)": round(est_route_distance, 2),
             "Dist. from First to Last Society (km)": round(first_to_last_distance, 2),
+            "Total Distance Between All Societies (km)": round(total_society_distance, 2),
             "Max Distance from Seed (km)": round(max_dist, 2),
             "Valid Cluster (180 to 220 Orders & <2km)": valid_cluster,
             "Delivery Sequence": delivery_path,
