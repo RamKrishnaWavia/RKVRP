@@ -71,8 +71,8 @@ uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
 # Supply source input
 st.sidebar.subheader("Enter Supply Source Coordinates")
-supply_lat = st.sidebar.number_input("Supply Latitude", format="%.6f")
-supply_lon = st.sidebar.number_input("Supply Longitude", format="%.6f")
+supply_lat = st.sidebar.number_input("Supply Latitude", value=13.068218288167737, format="%.6f")
+supply_lon = st.sidebar.number_input("Supply Longitude", value=77.44607278434877, format="%.6f")
 supply_source = (supply_lat, supply_lon) if supply_lat and supply_lon else None
 
 if uploaded_file is not None:
@@ -300,4 +300,3 @@ if uploaded_file is not None:
 
     csv = summary_df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv")
-    
