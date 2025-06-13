@@ -5,6 +5,7 @@ from geopy.distance import great_circle
 import folium
 from streamlit_folium import st_folium
 from folium import PolyLine
+from folium.features import DivIcon
 from io import StringIO
 import random
 
@@ -155,18 +156,33 @@ if uploaded_file is not None:
             icon=folium.Icon(color="red", icon="home")
         ).add_to(m)
 
+        full_route = [(source_lat, source_long)] + route
+
+        for idx, point in enumerate(full_route):
+            if idx < len(full_route) - 1:
+                dist = great_circle(point, full_route[idx+1]).km
+                midpoint = [(point[0] + full_route[idx+1][0]) / 2, (point[1] + full_route[idx+1][1]) / 2]
+                folium.PolyLine(locations=[point, full_route[idx+1]], color="blue").add_to(m)
+                folium.map.Marker(
+                    location=midpoint,
+                    icon=DivIcon(
+                        icon_size=(150,36),
+                        icon_anchor=(0,0),
+                        html=f'<div style="font-size: 10pt; color: black">{dist:.2f} km</div>',
+                    )
+                ).add_to(m)
+
         for idx, point in enumerate(route):
             folium.Marker(
                 location=point,
                 popup=f"{sequence[idx]} (Orders: {cluster_df.iloc[idx]['Orders']})",
                 icon=folium.Icon(color="green", icon="info-sign")
             ).add_to(m)
-        PolyLine(locations=[(source_lat, source_long)] + route, color="blue").add_to(m)
 
         st.subheader(f"Delivery Summary for Cluster {selected_cluster}")
         st.write(f"Total Orders: {cluster_df['Orders'].sum()}")
         st.write(f"Total Societies: {len(cluster_df)}")
-        st.write(f"Estimated Route Distance: {calculate_route_distance([(source_lat, source_long)] + route):.2f} km")
+        st.write(f"Estimated Route Distance: {calculate_route_distance(full_route):.2f} km")
 
     st_data = st_folium(m, width=800, height=500)
 
