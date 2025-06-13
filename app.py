@@ -115,6 +115,8 @@ if uploaded_file is not None:
             st.warning(f"Cluster creation hit max attempts for Hub ID {hub}. Remaining unassigned societies may exist.")
 
     cluster_summary = []
+    summary_map = folium.Map(location=[source_lat, source_long], zoom_start=13)
+    folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(summary_map)
 
     for cluster in sorted(df['Cluster'].unique()):
         cluster_df = df[df['Cluster'] == cluster]
@@ -134,11 +136,9 @@ if uploaded_file is not None:
         delivery_path = " -> ".join(sequence)
         cost_per_order = round((van_cost + cee_cost) / total_orders, 2)
 
-        m = folium.Map(location=[source_lat, source_long], zoom_start=13)
-        folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(m)
-
+        route_line = [(source_lat, source_long)] + route + [(source_lat, source_long)]
         for i, (soc_name, coord) in enumerate(zip(sequence, route)):
-            folium.Marker(coord, popup=soc_name, icon=folium.Icon(color='blue')).add_to(m)
+            Marker(coord, popup=f"{soc_name} (S{i+1})", icon=folium.Icon(color='blue')).add_to(summary_map)
             folium.map.Marker(
                 coord,
                 icon=DivIcon(
@@ -146,12 +146,8 @@ if uploaded_file is not None:
                     icon_anchor=(0, 0),
                     html=f'<div style="font-size: 12pt">S{i+1}</div>'
                 )
-            ).add_to(m)
-
-        route_line = [(source_lat, source_long)] + route + [(source_lat, source_long)]
-        PolyLine(route_line, color="blue", weight=2.5, opacity=1).add_to(m)
-        st.subheader(f"Map for Cluster {cluster}")
-        st_data = st_folium(m, width=700, height=500)
+            ).add_to(summary_map)
+        PolyLine(route_line, color="blue", weight=2.5, opacity=1).add_to(summary_map)
 
         cluster_summary.append({
             "Cluster ID": cluster,
@@ -169,21 +165,19 @@ if uploaded_file is not None:
             "Cost Per Order (₹)": cost_per_order
         })
 
-        st.markdown(f"**Delivery Sequence with Distances (Cluster {cluster}):**")
-        distance_path = []
-        prev = (source_lat, source_long)
-        for i, (name, coord) in enumerate(zip(sequence, route)):
-            dist = calculate_distance_km(prev[0], prev[1], coord[0], coord[1])
-            distance_path.append(f"{name} ({dist} km)")
-            prev = coord
-        back_to_depot = calculate_distance_km(prev[0], prev[1], source_lat, source_long)
-        distance_path.append(f"Depot ({back_to_depot} km)")
-        st.markdown(" → ".join(distance_path))
+    cluster_summary_df = pd.DataFrame(cluster_summary)
+    st.sidebar.subheader("Select Cluster to View")
+    cluster_options = cluster_summary_df.apply(lambda row: f"Cluster {row['Cluster ID']} ({row['No. of Societies']} Societies)", axis=1).tolist()
+    selected_option = st.sidebar.selectbox("Choose a Cluster", cluster_options)
+    selected_cluster_id = int(selected_option.split()[1])
 
-    st.subheader("Cluster Summary")
-    summary_df = pd.DataFrame(cluster_summary)
-    st.dataframe(summary_df)
-    
+    st.subheader(f"Map for Cluster {selected_cluster_id}")
+    st_folium(summary_map, width=700, height=500)
+
+    selected_cluster_df = cluster_summary_df[cluster_summary_df['Cluster ID'] == selected_cluster_id]
+    st.subheader("Cluster Details")
+    st.dataframe(selected_cluster_df)
+
     # Export to CSV
-    csv = summary_df.to_csv(index=False).encode('utf-8')
+    csv = cluster_summary_df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv", mime='text/csv')
