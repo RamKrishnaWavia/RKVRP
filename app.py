@@ -170,7 +170,8 @@ if uploaded_file is not None:
             if idx < len(full_route) - 1:
                 dist = great_circle(point, full_route[idx+1]).km
                 midpoint = [(point[0] + full_route[idx+1][0]) / 2, (point[1] + full_route[idx+1][1]) / 2]
-                folium.PolyLine(locations=[point, full_route[idx+1]], color="blue").add_to(m)
+                line_color = "orange" if idx == 0 else "blue"
+                folium.PolyLine(locations=[point, full_route[idx+1]], color=line_color, weight=5, dash_array='10' if idx == 0 else None).add_to(m)
                 folium.map.Marker(
                     location=midpoint,
                     icon=DivIcon(
