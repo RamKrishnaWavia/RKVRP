@@ -99,7 +99,10 @@ if uploaded_file is not None:
 
     for hub in df['Hub ID'].unique():
         hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
-        while (hub_df['Cluster'] == -1).any():
+        max_attempts = 100
+        attempt = 0
+        while (hub_df['Cluster'] == -1).any() and attempt < max_attempts:
+            attempt += 1
             unassigned = hub_df[hub_df['Cluster'] == -1]
             seed_idx = unassigned.index[0]
             seed = df.loc[seed_idx]
@@ -120,6 +123,9 @@ if uploaded_file is not None:
                 cluster_id += 1
 
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
+
+        if attempt == max_attempts:
+            st.warning(f"Cluster creation hit max attempts for Hub ID {hub}. Remaining unassigned societies may exist.")
 
     cluster_summary = []
 
