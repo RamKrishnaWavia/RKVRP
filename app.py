@@ -16,7 +16,7 @@ def calculate_route_distance(route):
     return distance
 
 # Helper to create delivery sequence using nearest neighbor heuristic
-def get_delivery_sequence(cluster_df, depot_coord=None):
+def get_delivery_sequence(cluster_df):
     points = cluster_df[['Latitude', 'Longitude']].values.tolist()
     names = cluster_df['Society'].tolist()
 
@@ -27,17 +27,7 @@ def get_delivery_sequence(cluster_df, depot_coord=None):
     sequence = []
     order = []
 
-    if depot_coord is None:
-        current_index = 0
-    else:
-        min_dist = float('inf')
-        current_index = 0
-        for i, pt in enumerate(points):
-            dist = great_circle(depot_coord, pt).km
-            if dist < min_dist:
-                min_dist = dist
-                current_index = i
-
+    current_index = 0
     sequence.append(names[current_index])
     order.append(points[current_index])
     visited[current_index] = True
@@ -64,12 +54,6 @@ def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
     return great_circle(seed_coord, coord).km <= max_dist_km
 
 st.title("RK - Societies Delivery Clustering Tool")
-
-# Sidebar settings for Supply DC coordinates
-st.sidebar.header("Settings")
-dc_lat = st.sidebar.number_input("Supply DC Latitude", value=12.9716, format="%.6f")
-dc_lon = st.sidebar.number_input("Supply DC Longitude", value=77.5946, format="%.6f")
-dc_coord = (dc_lat, dc_lon)
 
 # Template file download
 st.subheader("Download Template")
@@ -116,72 +100,30 @@ if uploaded_file is not None:
     selected_label = st.sidebar.selectbox("Select Cluster ID to View Map", options=["All"] + cluster_labels)
     selected_cluster = "All" if selected_label == "All" else cluster_id_map[selected_label]
 
-    cluster_summary = []
-    cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=12)
-
-    color_palette = [
-        "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen",
-        "cadetblue", "pink", "gray", "black", "teal"
-    ]
-
-    cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
-    for label in sorted(cluster_filter):
-        cluster_df = df[df['Cluster'] == label]
-        if cluster_df.empty:
-            continue
-        total_orders = cluster_df['Orders'].sum()
-        coords = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
-        distance_km = calculate_route_distance(coords)
-
-        seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
-        max_dist_km = max(great_circle(seed_coord, (row['Latitude'], row['Longitude'])).km for _, row in cluster_df.iterrows())
-
-        valid_cluster = 180 <= total_orders <= 220 and max_dist_km <= 2.0
-        hub_color_map = {hub: color_palette[i % len(color_palette)] for i, hub in enumerate(df['Hub ID'].unique())}
-        cluster_color_map = {cid: color for cid, color in zip(df['Cluster'].unique(), [
-            "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen",
-            "cadetblue", "pink", "gray", "black", "teal", "lightblue", "lightgreen", "beige", "brown"
-        ])}
-        color = cluster_color_map[label]
-
-        delivery_sequence, route_points = get_delivery_sequence(cluster_df, depot_coord=dc_coord)
-
-        for _, row in cluster_df.iterrows():
-            folium.Circle(
-                location=(row['Latitude'], row['Longitude']),
-                radius=500,
-                color=color,
-                fill=True,
-                fill_opacity=0.1,
-                tooltip=f"Cluster {label}: {total_orders} Orders, {len(cluster_df)} Societies"
-            ).add_to(cluster_map)
-
-        for idx, (point, society_name) in enumerate(zip(route_points, delivery_sequence)):
-            marker_label = f"{idx+1}: {society_name}"
+    if selected_cluster == "All":
+        map_center = [df['Latitude'].mean(), df['Longitude'].mean()]
+        m = folium.Map(location=map_center, zoom_start=12)
+        for _, row in df.iterrows():
+            folium.Marker(
+                location=[row['Latitude'], row['Longitude']],
+                popup=f"{row['Society']} (Orders: {row['Orders']}) - Cluster {row['Cluster']}",
+                icon=folium.Icon(color="blue")
+            ).add_to(m)
+    else:
+        cluster_df = df[df['Cluster'] == selected_cluster]
+        sequence, route = get_delivery_sequence(cluster_df)
+        m = folium.Map(location=[cluster_df['Latitude'].mean(), cluster_df['Longitude'].mean()], zoom_start=13)
+        for idx, point in enumerate(route):
             folium.Marker(
                 location=point,
-                popup=f"{marker_label}\nCluster ID: {label}",
-                tooltip=marker_label,
-                icon=folium.DivIcon(html=f'<div style="font-size:12px; color:{color}; font-weight:bold">{idx+1}</div>')
-            ).add_to(cluster_map)
+                popup=f"{sequence[idx]} (Orders: {cluster_df.iloc[idx]['Orders']})",
+                icon=folium.Icon(color="green", icon="info-sign")
+            ).add_to(m)
+        PolyLine(locations=route, color="blue").add_to(m)
 
-        if len(route_points) > 1:
-            for i in range(len(route_points) - 1):
-                dist = great_circle(route_points[i], route_points[i+1]).km
-                folium.plugins.AntPath(
-                    locations=[route_points[i], route_points[i+1]],
-                    color=color,
-                    weight=4,
-                    opacity=0.9,
-                    tooltip=f"{dist:.2f} km"
-                ).add_to(cluster_map)
+        st.subheader(f"Delivery Summary for Cluster {selected_cluster}")
+        st.write(f"Total Orders: {cluster_df['Orders'].sum()}")
+        st.write(f"Total Societies: {len(cluster_df)}")
+        st.write(f"Estimated Route Distance: {calculate_route_distance(route):.2f} km")
 
-    st_data = st_folium(cluster_map, width=725)
-
-    # Cluster summary table
-    st.subheader("Cluster Summary")
-    summary_df = pd.DataFrame(cluster_summary)
-    st.dataframe(summary_df)
-
-    csv = summary_df.to_csv(index=False).encode('utf-8')
-    st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv")
+    st_data = st_folium(m, width=800, height=500)
