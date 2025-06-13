@@ -76,7 +76,6 @@ uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
-    selected_cluster = st.sidebar.selectbox("Select Cluster ID to View Map", options=["All"] + sorted(df['Cluster'].unique()))
     st.write("Uploaded Data", df)
 
     df = df.sort_values(by='Orders', ascending=False).reset_index(drop=True)
@@ -104,6 +103,12 @@ if uploaded_file is not None:
             df.loc[cluster_members, 'Cluster'] = cluster_id
             cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
+
+    cluster_counts = df.groupby('Cluster').size().to_dict()
+    cluster_labels = [f"Cluster {cid} ({cluster_counts[cid]} societies)" for cid in sorted(cluster_counts.keys())]
+    cluster_id_map = {label: cid for label, cid in zip(cluster_labels, sorted(cluster_counts.keys()))}
+    selected_label = st.sidebar.selectbox("Select Cluster ID to View Map", options=["All"] + cluster_labels)
+    selected_cluster = "All" if selected_label == "All" else cluster_id_map[selected_label]
 
     cluster_summary = []
     cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=12)
