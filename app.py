@@ -110,7 +110,7 @@ if uploaded_file is not None:
     ]
 
     cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
-        for label in sorted(cluster_filter):
+    for label in sorted(cluster_filter):
         cluster_df = df[df['Cluster'] == label]
         if cluster_df.empty:
             continue
