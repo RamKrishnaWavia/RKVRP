@@ -126,7 +126,11 @@ if uploaded_file is not None:
 
         valid_cluster = 180 <= total_orders <= 220 and max_dist_km <= 2.0
         hub_color_map = {hub: color_palette[i % len(color_palette)] for i, hub in enumerate(df['Hub ID'].unique())}
-        color = hub_color_map[cluster_df['Hub ID'].iloc[0]]
+        cluster_color_map = {cid: color for cid, color in zip(df['Cluster'].unique(), [
+    "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen",
+    "cadetblue", "pink", "gray", "black", "teal", "lightblue", "lightgreen", "beige", "brown"
+])}
+        color = cluster_color_map[label]
 
         # Draw circle for each society in the cluster
         for _, row in cluster_df.iterrows():
@@ -139,32 +143,16 @@ if uploaded_file is not None:
                 tooltip=f"Cluster {label}: {total_orders} Orders, {len(cluster_df)} Societies"
             ).add_to(cluster_map)
 
-        # Add markers (highlight seed separately)
-        for i, row in cluster_df.reset_index().iterrows():
-            if i == 0:
-                folium.Marker(
-                    location=[row['Latitude'], row['Longitude']],
-                    popup=f"{row['Society']}
-Orders: {row['Orders']}
-Cluster ID: {label}
-Hub ID: {row['Hub ID']} (Seed)",
-                    tooltip=f"SEED: {row['Society']} ({row['Orders']} orders) - Cluster {label}",
-                    icon=folium.Icon(color="darkpurple", icon='star')
-                ).add_to(cluster_map)
-            else:
-                folium.Marker(
-                    location=[row['Latitude'], row['Longitude']],
-                    popup=f"{row['Society']}
-Orders: {row['Orders']}
-Cluster ID: {label}
-Hub ID: {row['Hub ID']}",
-                    tooltip=f"{row['Society']} ({row['Orders']} orders) - Cluster {label}",
-                    icon=folium.Icon(color=color, icon='info-sign')
-                ).add_to(cluster_map)
+        # Add numbered markers based on delivery sequence
+        for idx, (point, society_name) in enumerate(zip(route_points, delivery_sequence)):
+            marker_label = f"{idx+1}: {society_name}"
+            folium.Marker(
+                location=point,
+                popup=f"{marker_label}\nCluster ID: {label}",
+                tooltip=marker_label,
+                icon=folium.DivIcon(html=f'<div style="font-size:12px; color:{color}; font-weight:bold">{idx+1}</div>')
+            ).add_to(cluster_map)
 
-        # Route
-        delivery_sequence, route_points = get_delivery_sequence(cluster_df)
-        delivery_timings = estimate_timings(route_points)
         if len(route_points) > 1:
             PolyLine(locations=route_points, color=color, weight=4, opacity=0.9).add_to(cluster_map)
 
@@ -181,7 +169,7 @@ Hub ID: {row['Hub ID']}",
             "Max Distance from Seed (km)": round(max_dist_km, 2),
             "Valid Cluster (180–220 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No",
             "Delivery Sequence": " → ".join(delivery_sequence),
-            "Estimated Timings": " → ".join(delivery_timings).join(delivery_sequence)
+            "Estimated Timings": " → ".join(delivery_timings)
         })
 
     st.subheader("Overall Cluster Map")
