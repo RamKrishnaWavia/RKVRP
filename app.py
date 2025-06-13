@@ -19,6 +19,10 @@ def calculate_route_distance(route):
 def get_delivery_sequence(cluster_df):
     points = cluster_df[['Latitude', 'Longitude']].values.tolist()
     names = cluster_df['Society'].tolist()
+
+    if len(points) <= 1:
+        return names, points
+
     visited = [False] * len(points)
     sequence = []
     order = []
@@ -150,7 +154,26 @@ if uploaded_file is not None:
             ).add_to(cluster_map)
 
         if len(route_points) > 1:
-            PolyLine(locations=route_points, color=color, weight=4, opacity=0.9).add_to(cluster_map)
+            for i in range(len(route_points) - 1):
+                dist = great_circle(route_points[i], route_points[i+1]).km
+                mid_point = [(route_points[i][0] + route_points[i+1][0]) / 2, (route_points[i][1] + route_points[i+1][1]) / 2]
+                folium.plugins.AntPath(
+                locations=[route_points[i], route_points[i+1]],
+                color=color,
+                weight=4,
+                opacity=0.9,
+                tooltip=f"{dist:.2f} km"
+            ).add_to(cluster_map)
+
+            folium.RegularPolygonMarker(
+                location=route_points[i+1],
+                number_of_sides=3,
+                radius=8,
+                rotation=0,
+                color=color,
+                fill_color=color,
+                fill_opacity=1
+            ).add_to(cluster_map)
 
         cluster_name = str(label)
 
@@ -164,7 +187,8 @@ if uploaded_file is not None:
             "Total Distance (km)": round(distance_km, 2),
             "Max Distance from Seed (km)": round(max_dist_km, 2),
             "Valid Cluster (180–220 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No",
-            "Delivery Sequence": " → ".join(delivery_sequence)
+            "Delivery Sequence": " → ".join(delivery_sequence),
+            "Single Society Cluster": "Yes" if len(cluster_df) == 1 else "No"
         })
 
         st.subheader("Overall Cluster Map")
@@ -210,7 +234,26 @@ if uploaded_file is not None:
 
         delivery_sequence, route_points = get_delivery_sequence(cluster_df)
         if len(route_points) > 1:
-            PolyLine(locations=route_points, color=color, weight=4, opacity=0.9).add_to(individual_map)
+            for i in range(len(route_points) - 1):
+                dist = great_circle(route_points[i], route_points[i+1]).km
+                mid_point = [(route_points[i][0] + route_points[i+1][0]) / 2, (route_points[i][1] + route_points[i+1][1]) / 2]
+                folium.plugins.AntPath(
+                locations=[route_points[i], route_points[i+1]],
+                color=color,
+                weight=4,
+                opacity=0.9,
+                tooltip=f"{dist:.2f} km"
+            ).add_to(individual_map)
+
+            folium.RegularPolygonMarker(
+                location=route_points[i+1],
+                number_of_sides=3,
+                radius=8,
+                rotation=0,
+                color=color,
+                fill_color=color,
+                fill_opacity=1
+            ).add_to(individual_map)
 
         st.markdown(f"### Cluster {label} Map")
         st_folium(individual_map, width=725)
