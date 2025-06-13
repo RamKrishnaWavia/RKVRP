@@ -34,10 +34,11 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
     points = cluster_df[['Latitude', 'Longitude']].values.tolist()
     names = cluster_df['Society'].tolist()
     if len(points) <= 1:
-        return names, points
+        return names, points, []
     visited = [False] * len(points)
     sequence = []
     order = []
+    distances = []
     current_point = (depot_lat, depot_long)
     for _ in range(len(points)):
         min_dist = float('inf')
@@ -49,10 +50,11 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
                     min_dist = dist
                     next_index = i
         visited[next_index] = True
-        sequence.append(names[next_index])
+        sequence.append(f"{names[next_index]} ({min_dist} km)")
+        distances.append(min_dist)
         order.append(points[next_index])
         current_point = points[next_index]
-    return sequence, order
+    return sequence, order, distances
 
 # Check if candidate is within 2km from seed
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
@@ -125,7 +127,7 @@ if uploaded_file is not None:
         total_orders = cluster_df['Orders'].sum()
         seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
         max_dist = max(calculate_distance_km(seed_coord[0], seed_coord[1], row['Latitude'], row['Longitude']) for _, row in cluster_df.iterrows())
-        sequence, route = get_delivery_sequence(cluster_df, source_lat, source_long)
+        sequence, route, _ = get_delivery_sequence(cluster_df, source_lat, source_long)
         full_route = [(source_lat, source_long)] + route + [(source_lat, source_long)]
         total_distance = calculate_route_distance(full_route)
         est_route_distance = calculate_route_distance([(source_lat, source_long)] + route)
@@ -160,7 +162,7 @@ if uploaded_file is not None:
 
     selected_cluster_df = df[df['Cluster'] == selected_cluster_id]
     selected_summary = cluster_summary_df[cluster_summary_df['Cluster ID'] == selected_cluster_id]
-    sequence, route = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
+    sequence, route, distances = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
 
     # Show cluster metrics
     st.subheader("Cluster Details Summary")
