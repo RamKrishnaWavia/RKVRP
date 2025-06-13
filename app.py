@@ -71,8 +71,8 @@ uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
 # Supply source input
 st.sidebar.subheader("Enter Supply Source Coordinates")
-supply_lat = st.sidebar.number_input("Supply Latitude", value=13.068218288167737, format="%.6f")
-supply_lon = st.sidebar.number_input("Supply Longitude", value=77.44607278434877, format="%.6f")
+supply_lat = st.sidebar.number_input("Supply Latitude", value=12.989708618922553, format="%.6f")
+supply_lon = st.sidebar.number_input("Supply Longitude", value=77.78625342251868, format="%.6f")
 supply_source = (supply_lat, supply_lon) if supply_lat and supply_lon else None
 
 if uploaded_file is not None:
@@ -291,7 +291,9 @@ if uploaded_file is not None:
         max_leg_distance = 0.0
         if len(route_points) > 1:
             max_leg_distance = max(great_circle(route_points[i], route_points[i+1]).km for i in range(len(route_points)-1))
-        st.markdown(f"**Total Orders:** {total_orders} | **Total Distance:** {total_distance:.2f} km | **No. of Societies:** {len(cluster_df)} | **Max Leg Distance:** {max_leg_distance:.2f} km")
+        dc_to_first = great_circle(supply_source, route_points[0]).km if supply_source and route_points else 0.0
+        dc_total_distance = great_circle(supply_source, route_points[0]).km + total_distance if supply_source and route_points else total_distance
+        st.markdown(f"**Total Orders:** {total_orders} | **Total Distance:** {total_distance:.2f} km | **No. of Societies:** {len(cluster_df)} | **Max Leg Distance:** {max_leg_distance:.2f} km | **DC to First Society:** {dc_to_first:.2f} km | **Total Distance via DC:** {dc_total_distance:.2f} km")
         st_folium(individual_map, width=725)
 
     summary_df = pd.DataFrame(cluster_summary)
