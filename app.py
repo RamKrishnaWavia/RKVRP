@@ -16,7 +16,7 @@ def calculate_route_distance(route):
     return distance
 
 # Helper to create delivery sequence using nearest neighbor heuristic
-def get_delivery_sequence(cluster_df):
+def get_delivery_sequence(cluster_df, source_latlon=None):
     points = cluster_df[['Latitude', 'Longitude']].values.tolist()
     names = cluster_df['Society'].tolist()
 
@@ -27,7 +27,11 @@ def get_delivery_sequence(cluster_df):
     sequence = []
     order = []
 
-    current_index = 0
+    if source_latlon is not None:
+        current_index = np.argmin([great_circle(source_latlon, pt).km for pt in points])
+    else:
+        current_index = 0
+
     sequence.append(names[current_index])
     order.append(points[current_index])
     visited[current_index] = True
@@ -54,7 +58,7 @@ def get_delivery_sequence(cluster_df):
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
     return great_circle(seed_coord, coord).km <= max_dist_km
 
-st.title("RK - Societies Delivery Clustering Tool")
+st.title("Milk & Grocery Delivery Clustering Tool")
 
 # Template file download
 st.subheader("Download Template")
@@ -64,6 +68,12 @@ st.download_button("Download Template CSV", data=template.to_csv(index=False), f
 # File upload
 st.subheader("Upload Society Data")
 uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+
+# Supply source input
+st.sidebar.subheader("Enter Supply Source Coordinates")
+supply_lat = st.sidebar.number_input("Supply Latitude", format="%.6f")
+supply_lon = st.sidebar.number_input("Supply Longitude", format="%.6f")
+supply_source = (supply_lat, supply_lon) if supply_lat and supply_lon else None
 
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
@@ -130,7 +140,7 @@ if uploaded_file is not None:
 ])}
         color = cluster_color_map[label]
 
-        delivery_sequence, route_points = get_delivery_sequence(cluster_df)
+        delivery_sequence, route_points = get_delivery_sequence(cluster_df, supply_source)
 
         # Draw circle for each society in the cluster
         for _, row in cluster_df.iterrows():
@@ -232,7 +242,26 @@ if uploaded_file is not None:
                     icon=folium.Icon(color=color, icon='info-sign')
                 ).add_to(individual_map)
 
-        delivery_sequence, route_points = get_delivery_sequence(cluster_df)
+        delivery_sequence, route_points = get_delivery_sequence(cluster_df, supply_source)
+
+        # Add DC marker
+        if supply_source:
+            folium.Marker(
+                location=supply_source,
+                popup="Supply DC",
+                tooltip="Supply DC",
+                icon=folium.Icon(color="black", icon="home")
+            ).add_to(individual_map)
+
+            # Line from DC to first point
+            folium.PolyLine(
+                locations=[supply_source, route_points[0]],
+                color="black",
+                weight=3,
+                dash_array='5,5',
+                tooltip=f"{great_circle(supply_source, route_points[0]).km:.2f} km"
+            ).add_to(individual_map)
+
         if len(route_points) > 1:
             for i in range(len(route_points) - 1):
                 dist = great_circle(route_points[i], route_points[i+1]).km
