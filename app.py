@@ -116,6 +116,7 @@ if uploaded_file is not None:
         sequence, route = get_delivery_sequence(cluster_df)
         total_distance = calculate_route_distance([(source_lat, source_long)] + route)
         valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
+        delivery_path = " -> ".join(sequence)
 
         cluster_summary.append({
             "Cluster ID": cluster,
@@ -127,7 +128,7 @@ if uploaded_file is not None:
             "Total Distance (km)": round(total_distance, 2),
             "Max Distance from Seed (km)": round(max_dist, 2),
             "Valid Cluster (180 to 220 Orders & <2km)": valid_cluster,
-            "Delivery Sequence": ", ".join(sequence)
+            "Delivery Sequence": delivery_path
         })
 
     cluster_counts = df.groupby('Cluster').size().to_dict()
