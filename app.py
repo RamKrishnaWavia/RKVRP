@@ -72,7 +72,7 @@ uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 st.sidebar.subheader("Enter Supply Source Coordinates")
 supply_lat = st.sidebar.number_input("Supply Latitude", value=12.989708618922553, format="%.6f")
 supply_lon = st.sidebar.number_input("Supply Longitude", value=77.78625342251868, format="%.6f")
-supply_source = (supply_lat, supply_lon) if supply_lat and supply_lon else None
+supply_source = (supply_lat, supply_lon)
 
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
@@ -109,22 +109,19 @@ if uploaded_file is not None:
     cluster_id_map = {label: cid for label, cid in zip(cluster_labels, sorted(cluster_counts.keys()))}
     selected_label = st.sidebar.selectbox("Select Cluster ID to View Map", options=["All"] + cluster_labels)
     selected_cluster = "All" if selected_label == "All" else cluster_id_map[selected_label]
+    cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
 
     cluster_summary = []
 
-    # Draw main map only once before looping through clusters
+    # Draw main map
     st.subheader("Overall Cluster Map")
-    cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
     cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=12)
 
-    # Add supply DC marker
-    if supply_source:
-        folium.Marker(
-            location=supply_source,
-            popup="Supply DC",
-            tooltip="Supply DC",
-            icon=folium.Icon(color="black", icon="home")
-        ).add_to(cluster_map)
+    # Color map
+    cluster_color_map = {cid: color for cid, color in zip(df['Cluster'].unique(), [
+        "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen",
+        "cadetblue", "pink", "gray", "black", "teal", "lightblue", "lightgreen", "beige", "brown"
+    ])}
 
     for label in sorted(cluster_filter):
         cluster_df = df[df['Cluster'] == label]
@@ -133,20 +130,13 @@ if uploaded_file is not None:
         total_orders = cluster_df['Orders'].sum()
         coords = list(zip(cluster_df['Latitude'], cluster_df['Longitude']))
         distance_km = calculate_route_distance(coords)
-
         seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
         max_dist_km = max(great_circle(seed_coord, (row['Latitude'], row['Longitude'])).km for _, row in cluster_df.iterrows())
-
         valid_cluster = 180 <= total_orders <= 220 and max_dist_km <= 2.0
-        cluster_color_map = {cid: color for cid, color in zip(df['Cluster'].unique(), [
-            "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen",
-            "cadetblue", "pink", "gray", "black", "teal", "lightblue", "lightgreen", "beige", "brown"
-        ])}
         color = cluster_color_map[label]
 
         delivery_sequence, route_points = get_delivery_sequence(cluster_df, supply_source)
 
-        # Draw cluster circles
         for _, row in cluster_df.iterrows():
             folium.Circle(
                 location=(row['Latitude'], row['Longitude']),
@@ -166,36 +156,72 @@ if uploaded_file is not None:
                 icon=folium.DivIcon(html=f'<div style="font-size:12px; color:{color}; font-weight:bold">{idx+1}</div>')
             ).add_to(cluster_map)
 
-        # Add line from DC to first point
-        if supply_source and route_points:
-            folium.PolyLine(
-                locations=[supply_source, route_points[0]],
-                color=color,
-                weight=3,
-                dash_array='5,5',
-                tooltip=f"{great_circle(supply_source, route_points[0]).km:.2f} km"
-            ).add_to(cluster_map)
+        if len(route_points) > 1:
+            for i in range(len(route_points) - 1):
+                dist = great_circle(route_points[i], route_points[i+1]).km
+                folium.PolyLine(
+                    locations=[route_points[i], route_points[i+1]],
+                    color=color,
+                    weight=3,
+                    tooltip=f"{dist:.2f} km"
+                ).add_to(cluster_map)
 
         cluster_summary.append({
             "Cluster ID": label,
             "Hub ID": cluster_df['Hub ID'].iloc[0],
-            "Society IDs": ", ".join(cluster_df['Society ID'].astype(str).tolist()),
-            "Societies": ", ".join(cluster_df['Society'].tolist()),
             "No. of Societies": len(cluster_df),
             "Total Orders": total_orders,
             "Total Distance (km)": round(distance_km, 2),
             "Max Distance from Seed (km)": round(max_dist_km, 2),
-            "Valid Cluster (180–220 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No",
-            "Delivery Sequence": " → ".join(delivery_sequence),
+            "Valid Cluster (180–220 Orders & ≤2km)": "Yes" if valid_cluster else "No",
             "Single Society Cluster": "Yes" if len(cluster_df) == 1 else "No",
-            "DC to First Society (km)": round(great_circle(supply_source, route_points[0]).km, 2) if supply_source and route_points else 0.0,
-            "Total Distance via DC to last point (km)": round(great_circle(supply_source, route_points[0]).km + distance_km, 2) if supply_source and route_points else round(distance_km, 2),
-            "Round Trip Distance (DC → Cluster → DC) (km)": round(great_circle(supply_source, route_points[0]).km + distance_km + great_circle(route_points[-1], supply_source).km, 2) if supply_source and route_points else round(distance_km, 2)
+            "Delivery Sequence": " → ".join(delivery_sequence),
+            "DC to First Society (km)": round(great_circle(supply_source, route_points[0]).km, 2),
+            "Total Distance via DC (km)": round(great_circle(supply_source, route_points[0]).km + distance_km, 2),
+            "Round Trip Distance (DC → Cluster → DC) (km)": round(
+                great_circle(supply_source, route_points[0]).km + distance_km + great_circle(route_points[-1], supply_source).km, 2
+            )
         })
 
     st_folium(cluster_map, width=725)
-    summary_df = pd.DataFrame(cluster_summary)
+
+    # Individual cluster maps and summary
+    st.subheader("Individual Cluster Maps")
+    for label in sorted(df['Cluster'].unique()):
+        cluster_df = df[df['Cluster'] == label]
+        if cluster_df.empty:
+            continue
+
+        st.markdown(f"### Cluster {label} Map")
+        cluster_center = [cluster_df['Latitude'].mean(), cluster_df['Longitude'].mean()]
+        individual_map = folium.Map(location=cluster_center, zoom_start=14)
+        color = cluster_color_map[label]
+        delivery_sequence, route_points = get_delivery_sequence(cluster_df, supply_source)
+
+        # Add markers and circles
+        for idx, row in cluster_df.iterrows():
+            folium.Marker(
+                location=(row['Latitude'], row['Longitude']),
+                popup=f"{row['Society']} ({row['Orders']} orders)",
+                icon=folium.Icon(color=color)
+            ).add_to(individual_map)
+
+        # Add DC
+        folium.Marker(
+            location=supply_source,
+            popup="Supply DC",
+            tooltip="Supply DC",
+            icon=folium.Icon(color="black", icon="home")
+        ).add_to(individual_map)
+
+        # Draw route
+        folium.PolyLine([supply_source] + route_points, color=color, weight=4).add_to(individual_map)
+
+        st_folium(individual_map, width=725)
+
+    # Summary Table
     st.subheader("Cluster Summary")
+    summary_df = pd.DataFrame(cluster_summary)
     st.dataframe(summary_df)
     csv = summary_df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv")
