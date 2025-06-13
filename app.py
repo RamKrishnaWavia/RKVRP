@@ -203,10 +203,7 @@ if uploaded_file is not None:
             "Total Distance via DC to last point (km)": round(great_circle(supply_source, route_points[0]).km + distance_km, 2) if supply_source and route_points else round(distance_km, 2),
             "Round Trip Distance (DC → Cluster → DC) (km)": round(great_circle(supply_source, route_points[0]).km + distance_km + great_circle(route_points[-1], supply_source).km, 2) if supply_source and route_points else round(distance_km, 2)
         })
-        })
-
-        
-    st_data = st_folium(cluster_map, width=725)
+        st_data = st_folium(cluster_map, width=725)
 
     # Individual maps for each cluster
     st.subheader("Individual Cluster Maps")
