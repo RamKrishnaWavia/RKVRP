@@ -54,7 +54,7 @@ def get_delivery_sequence(cluster_df):
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
     return great_circle(seed_coord, coord).km <= max_dist_km
 
-st.title("Milk & Grocery Delivery Clustering Tool")
+st.title("RK - Societies Delivery Clustering Tool")
 
 # Template file download
 st.subheader("Download Template")
