@@ -159,7 +159,7 @@ for label in sorted(cluster_filter):
         folium.Marker(
             location=point,
             popup=f"{marker_label}
-Cluster ID: {label}",
+            Cluster ID: {label}",
             tooltip=marker_label,
             icon=folium.DivIcon(html=f'<div style="font-size:12px; color:{color}; font-weight:bold">{idx+1}</div>')
         ).add_to(cluster_map)
