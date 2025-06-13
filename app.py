@@ -13,8 +13,12 @@ import random
 def calculate_route_distance(route):
     distance = 0.0
     for i in range(len(route) - 1):
-        distance += great_circle(route[i], route[i+1]).km
+        distance += calculate_distance_km(route[i][0], route[i][1], route[i+1][0], route[i+1][1])
     return distance
+
+# Helper to calculate distance between two lat/long points
+def calculate_distance_km(lat1, lon1, lat2, lon2):
+    return round(great_circle((lat1, lon1), (lat2, lon2)).km, 2)
 
 # Optimized delivery sequence from depot using nearest neighbor heuristic
 def get_delivery_sequence(cluster_df, depot_lat, depot_long):
@@ -35,7 +39,7 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
         next_index = -1
         for i in range(len(points)):
             if not visited[i]:
-                dist = great_circle(current_point, points[i]).km
+                dist = calculate_distance_km(current_point[0], current_point[1], points[i][0], points[i][1])
                 if dist < min_dist:
                     min_dist = dist
                     next_index = i
@@ -48,7 +52,7 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
 
 # Check if candidate is within 2km from seed
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
-    return great_circle(seed_coord, coord).km <= max_dist_km
+    return calculate_distance_km(seed_coord[0], seed_coord[1], coord[0], coord[1]) <= max_dist_km
 
 st.title("RK - Societies Delivery Clustering Tool")
 
@@ -99,8 +103,10 @@ if uploaded_file is not None:
                     cluster_members.append(idx)
                     cluster_orders += candidate['Orders']
 
-            df.loc[cluster_members, 'Cluster'] = cluster_id
-            cluster_id += 1
+            if cluster_orders >= 180:
+                df.loc[cluster_members, 'Cluster'] = cluster_id
+                cluster_id += 1
+
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
 
     cluster_summary = []
@@ -113,7 +119,7 @@ if uploaded_file is not None:
         num_societies = len(cluster_df)
         total_orders = cluster_df['Orders'].sum()
         seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
-        max_dist = max(great_circle(seed_coord, (row['Latitude'], row['Longitude'])).km for _, row in cluster_df.iterrows())
+        max_dist = max(calculate_distance_km(seed_coord[0], seed_coord[1], row['Latitude'], row['Longitude']) for _, row in cluster_df.iterrows())
         sequence, route = get_delivery_sequence(cluster_df, source_lat, source_long)
         full_route = [(source_lat, source_long)] + route + [(source_lat, source_long)]
         total_distance = calculate_route_distance(full_route)
@@ -168,7 +174,7 @@ if uploaded_file is not None:
 
         for idx, point in enumerate(full_route):
             if idx < len(full_route) - 1:
-                dist = great_circle(point, full_route[idx+1]).km
+                dist = calculate_distance_km(point[0], point[1], full_route[idx+1][0], full_route[idx+1][1])
                 midpoint = [(point[0] + full_route[idx+1][0]) / 2, (point[1] + full_route[idx+1][1]) / 2]
                 line_color = "orange" if idx == 0 else "blue"
                 folium.PolyLine(locations=[point, full_route[idx+1]], color=line_color, weight=5, dash_array='10' if idx == 0 else None).add_to(m)
