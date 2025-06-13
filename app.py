@@ -206,9 +206,7 @@ for label in sorted(cluster_filter):
 
 # Individual maps for each cluster
 st.subheader("Individual Cluster Maps")
-        
-
-  for label in sorted(df['Cluster'].unique()):
+for label in sorted(df['Cluster'].unique()):
         cluster_df = df[df['Cluster'] == label]
         if cluster_df.empty:
             continue
