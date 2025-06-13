@@ -43,7 +43,7 @@ def get_delivery_sequence(cluster_df):
         order.append(points[next_index])
         current_index = next_index
 
-        return sequence, order
+    return sequence, order
 
 
 # Check if candidate is within 2km from seed
