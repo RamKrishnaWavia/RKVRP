@@ -117,13 +117,14 @@ if uploaded_file is not None:
     cluster_filter = df['Cluster'].unique() if selected_cluster == "All" else [selected_cluster]
     cluster_map = folium.Map(location=[df['Latitude'].mean(), df['Longitude'].mean()], zoom_start=12)
 
-    # Color setup
-    color_palette = [
-        "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen",
-        "cadetblue", "pink", "gray", "black", "teal", "lightblue", "lightgreen", "beige", "brown"
-    ]
-    hub_color_map = {hub: color_palette[i % len(color_palette)] for i, hub in enumerate(df['Hub ID'].unique())}
-    cluster_color_map = {cid: color_palette[i % len(color_palette)] for i, cid in enumerate(df['Cluster'].unique())}
+    # Add supply DC marker
+    if supply_source:
+        folium.Marker(
+            location=supply_source,
+            popup="Supply DC",
+            tooltip="Supply DC",
+            icon=folium.Icon(color="black", icon="home")
+        ).add_to(cluster_map)
 
     for label in sorted(cluster_filter):
         cluster_df = df[df['Cluster'] == label]
@@ -135,11 +136,17 @@ if uploaded_file is not None:
 
         seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
         max_dist_km = max(great_circle(seed_coord, (row['Latitude'], row['Longitude'])).km for _, row in cluster_df.iterrows())
+
         valid_cluster = 180 <= total_orders <= 220 and max_dist_km <= 2.0
+        cluster_color_map = {cid: color for cid, color in zip(df['Cluster'].unique(), [
+            "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen",
+            "cadetblue", "pink", "gray", "black", "teal", "lightblue", "lightgreen", "beige", "brown"
+        ])}
         color = cluster_color_map[label]
 
         delivery_sequence, route_points = get_delivery_sequence(cluster_df, supply_source)
 
+        # Draw cluster circles
         for _, row in cluster_df.iterrows():
             folium.Circle(
                 location=(row['Latitude'], row['Longitude']),
@@ -159,6 +166,16 @@ if uploaded_file is not None:
                 icon=folium.DivIcon(html=f'<div style="font-size:12px; color:{color}; font-weight:bold">{idx+1}</div>')
             ).add_to(cluster_map)
 
+        # Add line from DC to first point
+        if supply_source and route_points:
+            folium.PolyLine(
+                locations=[supply_source, route_points[0]],
+                color=color,
+                weight=3,
+                dash_array='5,5',
+                tooltip=f"{great_circle(supply_source, route_points[0]).km:.2f} km"
+            ).add_to(cluster_map)
+
         cluster_summary.append({
             "Cluster ID": label,
             "Hub ID": cluster_df['Hub ID'].iloc[0],
@@ -176,9 +193,7 @@ if uploaded_file is not None:
             "Round Trip Distance (DC → Cluster → DC) (km)": round(great_circle(supply_source, route_points[0]).km + distance_km + great_circle(route_points[-1], supply_source).km, 2) if supply_source and route_points else round(distance_km, 2)
         })
 
-    st_data = st_folium(cluster_map, width=725)
-
-    # Summary table
+    st_folium(cluster_map, width=725)
     summary_df = pd.DataFrame(cluster_summary)
     st.subheader("Cluster Summary")
     st.dataframe(summary_df)
