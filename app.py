@@ -153,6 +153,9 @@ if uploaded_file is not None:
         sequence, route = get_delivery_sequence(cluster_df)
         m = folium.Map(location=[cluster_df['Latitude'].mean(), cluster_df['Longitude'].mean()], zoom_start=13)
 
+        society_names_line = " -> ".join(sequence)
+        st.markdown(f"**Societies in Delivery Sequence:** {society_names_line}")
+
         folium.Marker(
             location=[source_lat, source_long],
             popup="Depot",
