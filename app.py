@@ -55,6 +55,13 @@ def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
 
 st.title("RK - Societies Delivery Clustering Tool")
 
+# Sidebar source location input
+st.sidebar.subheader("Supply Source Location")
+def_lat = 12.989708618922553
+def_long = 77.78625342251868
+source_lat = st.sidebar.number_input("Depot Latitude", value=def_lat, format="%.8f")
+source_long = st.sidebar.number_input("Depot Longitude", value=def_long, format="%.8f")
+
 # Template file download
 st.subheader("Download Template")
 template = pd.DataFrame({"Society ID": [], "Society": [], "Latitude": [], "Longitude": [], "Orders": [], "Hub ID": []})
@@ -113,17 +120,24 @@ if uploaded_file is not None:
         cluster_df = df[df['Cluster'] == selected_cluster]
         sequence, route = get_delivery_sequence(cluster_df)
         m = folium.Map(location=[cluster_df['Latitude'].mean(), cluster_df['Longitude'].mean()], zoom_start=13)
+
+        folium.Marker(
+            location=[source_lat, source_long],
+            popup="Depot",
+            icon=folium.Icon(color="red", icon="home")
+        ).add_to(m)
+
         for idx, point in enumerate(route):
             folium.Marker(
                 location=point,
                 popup=f"{sequence[idx]} (Orders: {cluster_df.iloc[idx]['Orders']})",
                 icon=folium.Icon(color="green", icon="info-sign")
             ).add_to(m)
-        PolyLine(locations=route, color="blue").add_to(m)
+        PolyLine(locations=[(source_lat, source_long)] + route, color="blue").add_to(m)
 
         st.subheader(f"Delivery Summary for Cluster {selected_cluster}")
         st.write(f"Total Orders: {cluster_df['Orders'].sum()}")
         st.write(f"Total Societies: {len(cluster_df)}")
-        st.write(f"Estimated Route Distance: {calculate_route_distance(route):.2f} km")
+        st.write(f"Estimated Route Distance: {calculate_route_distance([(source_lat, source_long)] + route):.2f} km")
 
     st_data = st_folium(m, width=800, height=500)
