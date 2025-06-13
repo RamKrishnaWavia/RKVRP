@@ -198,7 +198,11 @@ if uploaded_file is not None:
             "Max Distance from Seed (km)": round(max_dist_km, 2),
             "Valid Cluster (180–220 Orders & ≤2km from seed)": "Yes" if valid_cluster else "No",
             "Delivery Sequence": " → ".join(delivery_sequence),
-            "Single Society Cluster": "Yes" if len(cluster_df) == 1 else "No"
+            "Single Society Cluster": "Yes" if len(cluster_df) == 1 else "No",
+            "DC to First Society (km)": round(great_circle(supply_source, route_points[0]).km, 2) if supply_source and route_points else 0.0,
+            "Total Distance via DC to last point (km)": round(great_circle(supply_source, route_points[0]).km + distance_km, 2) if supply_source and route_points else round(distance_km, 2),
+            "Round Trip Distance (DC → Cluster → DC) (km)": round(great_circle(supply_source, route_points[0]).km + distance_km + great_circle(route_points[-1], supply_source).km, 2) if supply_source and route_points else round(distance_km, 2)
+        })
         })
 
         
@@ -293,7 +297,9 @@ if uploaded_file is not None:
             max_leg_distance = max(great_circle(route_points[i], route_points[i+1]).km for i in range(len(route_points)-1))
         dc_to_first = great_circle(supply_source, route_points[0]).km if supply_source and route_points else 0.0
         dc_total_distance = great_circle(supply_source, route_points[0]).km + total_distance if supply_source and route_points else total_distance
-        st.markdown(f"**Total Orders:** {total_orders} | **Total Distance:** {total_distance:.2f} km | **No. of Societies:** {len(cluster_df)} | **Max Leg Distance:** {max_leg_distance:.2f} km | **DC to First Society:** {dc_to_first:.2f} km | **Total Distance via DC:** {dc_total_distance:.2f} km")
+        dc_back_distance = great_circle(route_points[-1], supply_source).km if supply_source and route_points else 0.0
+        round_trip_distance = dc_total_distance + dc_back_distance
+        st.markdown(f"**Total Orders:** {total_orders} | **Total Distance Travelled in Cluster:** {total_distance:.2f} km | **No. of Societies:** {len(cluster_df)} | **Max Leg Distance between the society:** {max_leg_distance:.2f} km | **DC to First Society:** {dc_to_first:.2f} km | **Total Distance via DC to last delivery point:** {dc_total_distance:.2f} km | **Total Round Trip (DC → Cluster → DC):** {round_trip_distance:.2f} km")
         st_folium(individual_map, width=725)
 
     summary_df = pd.DataFrame(cluster_summary)
