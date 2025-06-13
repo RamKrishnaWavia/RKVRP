@@ -309,8 +309,8 @@ for label in sorted(df['Cluster'].unique()):
         dc_back_distance = great_circle(route_points[-1], supply_source).km if supply_source and route_points else 0.0
         round_trip_distance = dc_total_distance + dc_back_distance
         st.markdown(f"**Total Orders:** {total_orders} | **Total Distance Travelled in Cluster:** {total_distance:.2f} km | **No. of Societies:** {len(cluster_df)} | **Max Leg Distance between the society:** {max_leg_distance:.2f} km | **DC to First Society:** {dc_to_first:.2f} km | **Total Distance via DC to last delivery point:** {dc_total_distance:.2f} km | **Total Round Trip (DC → Cluster → DC):** {round_trip_distance:.2f} km")
-st_folium(individual_map, width=725)
-summary_df = pd.DataFrame(cluster_summary)
+        st_folium(individual_map, width=725)
+        summary_df = pd.DataFrame(cluster_summary)
         st.subheader("Cluster Summary")
         st.dataframe(summary_df)
         csv = summary_df.to_csv(index=False).encode('utf-8')
