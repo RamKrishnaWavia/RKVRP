@@ -62,6 +62,9 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
         distances.append(min_dist)
         current_point = points[next_index]
         order.append(current_point)
+
+    total_seq_distance = round(sum(distances), 2)
+    sequence.append(f"Total Distance: {total_seq_distance} km")
     return sequence, order, distances
 
 # Check if candidate is within 2km from seed
@@ -180,7 +183,7 @@ if uploaded_file is not None:
     st.subheader(f"Map for Cluster {selected_cluster_id}")
     cluster_map = folium.Map(location=[source_lat, source_long], zoom_start=13)
     folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(cluster_map)
-    for i, (soc_name, coord) in enumerate(zip(sequence, route)):
+    for i, (soc_name, coord) in enumerate(zip(sequence[:-1], route)):
         Marker(coord, popup=f"{soc_name} (S{i+1})", icon=folium.Icon(color='blue')).add_to(cluster_map)
         folium.map.Marker(
             coord,
