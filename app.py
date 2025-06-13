@@ -75,8 +75,8 @@ st.subheader("Upload Society Data")
 uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
 if uploaded_file is not None:
-    selected_cluster = st.sidebar.selectbox("Select Cluster ID to View Map", options=["All"] + sorted(df['Cluster'].unique()))
     df = pd.read_csv(uploaded_file)
+    selected_cluster = st.sidebar.selectbox("Select Cluster ID to View Map", options=["All"] + sorted(df['Cluster'].unique()))
     st.write("Uploaded Data", df)
 
     df = df.sort_values(by='Orders', ascending=False).reset_index(drop=True)
