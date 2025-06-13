@@ -175,48 +175,52 @@ if uploaded_file is not None:
         st.subheader("Overall Cluster Map")
     st_data = st_folium(cluster_map, width=725)
 
-# Individual maps for each cluster
-st.subheader("Individual Cluster Maps")
-for label in sorted(df['Cluster'].unique()):
-    cluster_df = df[df['Cluster'] == label]
-    cluster_center = [cluster_df['Latitude'].mean(), cluster_df['Longitude'].mean()]
-    individual_map = folium.Map(location=cluster_center, zoom_start=14)
+    # Individual maps for each cluster
+    st.subheader("Individual Cluster Maps")
+    for label in sorted(df['Cluster'].unique()):
+        cluster_df = df[df['Cluster'] == label]
+        cluster_center = [cluster_df['Latitude'].mean(), cluster_df['Longitude'].mean()]
+        individual_map = folium.Map(location=cluster_center, zoom_start=14)
 
-    color = hub_color_map[cluster_df['Hub ID'].iloc[0]]
-    seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
+        color = hub_color_map[cluster_df['Hub ID'].iloc[0]]
+        seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
 
-    for _, row in cluster_df.iterrows():
-        folium.Circle(
-            location=(row['Latitude'], row['Longitude']),
-            radius=500,
-            color=color,
-            fill=True,
-            fill_opacity=0.1,
-            tooltip=f"Cluster {label}: {cluster_df['Orders'].sum()} Orders, {len(cluster_df)} Societies"
-        ).add_to(individual_map)
-
-    for i, row in cluster_df.reset_index().iterrows():
-        if i == 0:
-            folium.Marker(
-                location=[row['Latitude'], row['Longitude']],
-                popup=f"{row['Society']}\nOrders: {row['Orders']}\nCluster ID: {label} (Seed)",
-                tooltip=f"SEED: {row['Society']} ({row['Orders']} orders) - Cluster {label}",
-                icon=folium.Icon(color="darkpurple", icon='star')
-            ).add_to(individual_map)
-        else:
-            folium.Marker(
-                location=[row['Latitude'], row['Longitude']],
-                popup=f"{row['Society']}\nOrders: {row['Orders']}\nCluster ID: {label}",
-                tooltip=f"{row['Society']} ({row['Orders']} orders) - Cluster {label}",
-                icon=folium.Icon(color=color, icon='info-sign')
+        for _, row in cluster_df.iterrows():
+            folium.Circle(
+                location=(row['Latitude'], row['Longitude']),
+                radius=500,
+                color=color,
+                fill=True,
+                fill_opacity=0.1,
+                tooltip=f"Cluster {label}: {cluster_df['Orders'].sum()} Orders, {len(cluster_df)} Societies"
             ).add_to(individual_map)
 
-    delivery_sequence, route_points = get_delivery_sequence(cluster_df)
-    if len(route_points) > 1:
-        PolyLine(locations=route_points, color=color, weight=4, opacity=0.9).add_to(individual_map)
+        for i, row in cluster_df.reset_index().iterrows():
+            if i == 0:
+                folium.Marker(
+                    location=[row['Latitude'], row['Longitude']],
+                    popup=f"{row['Society']}
+Orders: {row['Orders']}
+Cluster ID: {label} (Seed)",
+                    tooltip=f"SEED: {row['Society']} ({row['Orders']} orders) - Cluster {label}",
+                    icon=folium.Icon(color="darkpurple", icon='star')
+                ).add_to(individual_map)
+            else:
+                folium.Marker(
+                    location=[row['Latitude'], row['Longitude']],
+                    popup=f"{row['Society']}
+Orders: {row['Orders']}
+Cluster ID: {label}",
+                    tooltip=f"{row['Society']} ({row['Orders']} orders) - Cluster {label}",
+                    icon=folium.Icon(color=color, icon='info-sign')
+                ).add_to(individual_map)
 
-    st.markdown(f"### Cluster {label} Map")
-    st_folium(individual_map, width=725)
+        delivery_sequence, route_points = get_delivery_sequence(cluster_df)
+        if len(route_points) > 1:
+            PolyLine(locations=route_points, color=color, weight=4, opacity=0.9).add_to(individual_map)
+
+        st.markdown(f"### Cluster {label} Map")
+        st_folium(individual_map, width=725)
 
     summary_df = pd.DataFrame(cluster_summary)
     st.subheader("Cluster Summary")
