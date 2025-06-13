@@ -4,7 +4,7 @@ import numpy as np
 from math import radians, sin, cos, sqrt, atan2
 import folium
 from streamlit_folium import st_folium
-from folium import PolyLine
+from folium import PolyLine, Marker
 from folium.features import DivIcon
 from io import StringIO
 import random
@@ -18,34 +18,27 @@ def calculate_route_distance(route):
 
 # Helper to calculate distance between two lat/long points using Haversine formula
 def calculate_distance_km(lat1, lon1, lat2, lon2):
-    R = 6371.0  # Radius of Earth in kilometers
+    R = 6371.0
     lat1_rad = radians(lat1)
     lon1_rad = radians(lon1)
     lat2_rad = radians(lat2)
     lon2_rad = radians(lon2)
-
     dlat = lat2_rad - lat1_rad
     dlon = lon2_rad - lon1_rad
-
     a = sin(dlat / 2)**2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2)**2
     c = 2 * atan2(sqrt(a), sqrt(1 - a))
-    distance = R * c
-    return round(distance, 2)
+    return round(R * c, 2)
 
 # Optimized delivery sequence from depot using nearest neighbor heuristic
 def get_delivery_sequence(cluster_df, depot_lat, depot_long):
     points = cluster_df[['Latitude', 'Longitude']].values.tolist()
     names = cluster_df['Society'].tolist()
-
     if len(points) <= 1:
         return names, points
-
     visited = [False] * len(points)
     sequence = []
     order = []
-
     current_point = (depot_lat, depot_long)
-
     for _ in range(len(points)):
         min_dist = float('inf')
         next_index = -1
@@ -59,7 +52,6 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
         sequence.append(names[next_index])
         order.append(points[next_index])
         current_point = points[next_index]
-
     return sequence, order
 
 # Check if candidate is within 2km from seed
@@ -107,23 +99,18 @@ if uploaded_file is not None:
             seed_idx = unassigned.index[0]
             seed = df.loc[seed_idx]
             seed_coord = (seed['Latitude'], seed['Longitude'])
-
             cluster_members = [seed_idx]
             cluster_orders = seed['Orders']
-
             for idx in unassigned.index[1:]:
                 candidate = df.loc[idx]
                 candidate_coord = (candidate['Latitude'], candidate['Longitude'])
                 if cluster_orders + candidate['Orders'] <= 220 and is_within_seed_radius(seed_coord, candidate_coord):
                     cluster_members.append(idx)
                     cluster_orders += candidate['Orders']
-
             if cluster_orders >= 180:
                 df.loc[cluster_members, 'Cluster'] = cluster_id
                 cluster_id += 1
-
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
-
         if attempt == max_attempts:
             st.warning(f"Cluster creation hit max attempts for Hub ID {hub}. Remaining unassigned societies may exist.")
 
@@ -147,6 +134,25 @@ if uploaded_file is not None:
         delivery_path = " -> ".join(sequence)
         cost_per_order = round((van_cost + cee_cost) / total_orders, 2)
 
+        m = folium.Map(location=[source_lat, source_long], zoom_start=13)
+        folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(m)
+
+        for i, (soc_name, coord) in enumerate(zip(sequence, route)):
+            folium.Marker(coord, popup=soc_name, icon=folium.Icon(color='blue')).add_to(m)
+            folium.map.Marker(
+                coord,
+                icon=DivIcon(
+                    icon_size=(150, 36),
+                    icon_anchor=(0, 0),
+                    html=f'<div style="font-size: 12pt">S{i+1}</div>'
+                )
+            ).add_to(m)
+
+        route_line = [(source_lat, source_long)] + route + [(source_lat, source_long)]
+        PolyLine(route_line, color="blue", weight=2.5, opacity=1).add_to(m)
+        st.subheader(f"Map for Cluster {cluster}")
+        st_data = st_folium(m, width=700, height=500)
+
         cluster_summary.append({
             "Cluster ID": cluster,
             "Hub ID": hub_id,
@@ -162,6 +168,17 @@ if uploaded_file is not None:
             "Delivery Sequence": delivery_path,
             "Cost Per Order (₹)": cost_per_order
         })
+
+        st.markdown(f"**Delivery Sequence with Distances (Cluster {cluster}):**")
+        distance_path = []
+        prev = (source_lat, source_long)
+        for i, (name, coord) in enumerate(zip(sequence, route)):
+            dist = calculate_distance_km(prev[0], prev[1], coord[0], coord[1])
+            distance_path.append(f"{name} ({dist} km)")
+            prev = coord
+        back_to_depot = calculate_distance_km(prev[0], prev[1], source_lat, source_long)
+        distance_path.append(f"Depot ({back_to_depot} km)")
+        st.markdown(" → ".join(distance_path))
 
     st.subheader("Cluster Summary")
     st.dataframe(pd.DataFrame(cluster_summary))
