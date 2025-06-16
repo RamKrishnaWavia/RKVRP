@@ -73,7 +73,7 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
     return calculate_distance_km(seed_coord[0], seed_coord[1], coord[0], coord[1]) <= max_dist_km
 
-st.title("RK - Societies Delivery Clustering Tool")
+st.title("RK - Societies Delivery Clustering and Sequencing Tool")
 
 # Sidebar source location input
 st.sidebar.subheader("Supply Source Location")
