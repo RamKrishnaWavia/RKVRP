@@ -172,8 +172,14 @@ if uploaded_file is not None:
         })
 
     cluster_summary_df = pd.DataFrame(cluster_summary)
-    if show_only_valid:
+
+    st.sidebar.subheader("Cluster Type to View")
+    cluster_type = st.sidebar.radio("Choose Cluster Type", ["All", "Valid Only", "Invalid Only"])
+
+    if cluster_type == "Valid Only":
         cluster_summary_df = cluster_summary_df[cluster_summary_df["Valid Cluster (180 to 220 Orders & <2km)"] == True]
+    elif cluster_type == "Invalid Only":
+        cluster_summary_df = cluster_summary_df[cluster_summary_df["Valid Cluster (180 to 220 Orders & <2km)"] == False]
 
     st.sidebar.subheader("Select Cluster to View")
     cluster_options = cluster_summary_df.apply(lambda row: f"Cluster {row['Cluster ID']} ({row['No. of Societies']} Societies)", axis=1).tolist()
