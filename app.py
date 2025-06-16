@@ -8,6 +8,10 @@ from folium import PolyLine, Marker
 from folium.features import DivIcon
 from io import StringIO
 import random
+import logging
+
+# Set logging level to ERROR to suppress warning-level logs
+logging.basicConfig(level=logging.ERROR)
 
 # Helper to calculate route distance in km
 def calculate_route_distance(route):
@@ -126,8 +130,6 @@ if uploaded_file is not None:
                 df.loc[cluster_members, 'Cluster'] = cluster_id
                 cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
-        if attempt == max_attempts:
-            st.warning(f"Cluster creation hit max attempts for Hub ID {hub}. Remaining unassigned societies may exist.")
 
     cluster_summary = []
 
