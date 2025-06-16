@@ -87,10 +87,6 @@ st.sidebar.subheader("Cost Settings")
 van_cost = st.sidebar.number_input("Van Cost (₹)", value=834, step=1)
 cee_cost = st.sidebar.number_input("CEE Cost (₹)", value=333, step=1)
 
-# Sidebar cluster filter option
-st.sidebar.subheader("Cluster Filters")
-show_only_valid = st.sidebar.checkbox("Show only valid clusters", value=False)
-
 # Template file download
 st.subheader("Download Template")
 template = pd.DataFrame({"Society ID": [], "Society": [], "Latitude": [], "Longitude": [], "Orders": [], "Hub ID": []})
