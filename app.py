@@ -186,30 +186,32 @@ if uploaded_file is not None:
 
     selected_cluster_df = df[df['Cluster'] == selected_cluster_id]
     selected_summary = cluster_summary_df[cluster_summary_df['Cluster ID'] == selected_cluster_id]
-    sequence, route, distances, _ = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
 
-    st.subheader("Cluster Details Summary")
-    for col, val in selected_summary.iloc[0].items():
-        st.markdown(f"**{col}**: {val}")
+    if selected_summary.iloc[0]['Valid Cluster (180 to 220 Orders & <2km)']:
+        sequence, route, distances, _ = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
 
-    st.subheader(f"Map for Cluster {selected_cluster_id}")
-    cluster_map = folium.Map(location=[source_lat, source_long], zoom_start=13)
-    folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(cluster_map)
-    for i, (soc_name, coord) in enumerate(zip(sequence[:-1], route)):
-        Marker(coord, popup=f"{soc_name} (S{i+1})", icon=folium.Icon(color='blue')).add_to(cluster_map)
-        folium.map.Marker(
-            coord,
-            icon=DivIcon(
-                icon_size=(150, 36),
-                icon_anchor=(0, 0),
-                html=f'<div style="font-size: 12pt">S{i+1}</div>'
-            )
-        ).add_to(cluster_map)
-    PolyLine([(source_lat, source_long)] + route + [(source_lat, source_long)], color="blue", weight=2.5, opacity=1).add_to(cluster_map)
-    st_folium(cluster_map, width=700, height=500)
+        st.subheader("Cluster Details Summary")
+        for col, val in selected_summary.iloc[0].items():
+            st.markdown(f"**{col}**: {val}")
 
-    st.subheader("Cluster Summary Table")
-    st.dataframe(selected_summary)
+        st.subheader(f"Map for Cluster {selected_cluster_id}")
+        cluster_map = folium.Map(location=[source_lat, source_long], zoom_start=13)
+        folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(cluster_map)
+        for i, (soc_name, coord) in enumerate(zip(sequence[:-1], route)):
+            Marker(coord, popup=f"{soc_name} (S{i+1})", icon=folium.Icon(color='blue')).add_to(cluster_map)
+            folium.map.Marker(
+                coord,
+                icon=DivIcon(
+                    icon_size=(150, 36),
+                    icon_anchor=(0, 0),
+                    html=f'<div style="font-size: 12pt">S{i+1}</div>'
+                )
+            ).add_to(cluster_map)
+        PolyLine([(source_lat, source_long)] + route + [(source_lat, source_long)], color="blue", weight=2.5, opacity=1).add_to(cluster_map)
+        st_folium(cluster_map, width=700, height=500)
+
+        st.subheader("Cluster Summary Table")
+        st.dataframe(selected_summary)
 
     csv = cluster_summary_df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv", mime='text/csv')
