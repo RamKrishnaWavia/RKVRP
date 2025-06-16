@@ -10,18 +10,8 @@ from io import StringIO
 import random
 import logging
 
-st.title("RK - Societies Delivery Clustering Tool")
-
-# Sidebar - Logging option
-log_to_file = st.sidebar.checkbox("Log unassigned cluster warnings to file")
-log_to_display = st.sidebar.checkbox("Display unassigned cluster warnings")
-log_file_path = "unassigned_clusters.log"
-if log_to_file:
-    logging.basicConfig(filename=log_file_path, filemode='a', level=logging.INFO)
-else:
-    logging.basicConfig(level=logging.ERROR)
-
-log_messages = []
+# Set logging level to ERROR to suppress warning-level logs
+logging.basicConfig(level=logging.ERROR)
 
 # Helper to calculate route distance in km
 def calculate_route_distance(route):
@@ -54,7 +44,7 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
     order = []
     distances = []
     inefficiencies = []
-    current_index = 0
+    current_index = 0  # Start from the first society
     current_point = points[current_index]
     visited[current_index] = True
     sequence.append(f"{names[current_index]} (0 km)")
@@ -86,6 +76,8 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
 # Check if candidate is within 2km from seed
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
     return calculate_distance_km(seed_coord[0], seed_coord[1], coord[0], coord[1]) <= max_dist_km
+
+st.title("RK - Societies Delivery Clustering Tool")
 
 # Sidebar source location input
 st.sidebar.subheader("Supply Source Location")
@@ -138,11 +130,86 @@ if uploaded_file is not None:
                 df.loc[cluster_members, 'Cluster'] = cluster_id
                 cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
-        if (hub_df['Cluster'] == -1).any():
-            msg = f"Cluster creation hit max attempts for Hub ID {hub}. Remaining unassigned societies may exist."
-            log_messages.append(msg)
-            if log_to_file:
-                logging.info(msg)
 
-    if log_to_display and log_messages:
-        st.warning("\n".join(log_messages))
+    cluster_summary = []
+
+    for cluster in sorted(df['Cluster'].unique()):
+        cluster_df = df[df['Cluster'] == cluster]
+        hub_id = cluster_df['Hub ID'].iloc[0]
+        society_ids = list(cluster_df['Society ID'])
+        societies = list(cluster_df['Society'])
+        num_societies = len(cluster_df)
+        total_orders = cluster_df['Orders'].sum()
+        seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
+        max_dist = max(calculate_distance_km(seed_coord[0], seed_coord[1], row['Latitude'], row['Longitude']) for _, row in cluster_df.iterrows())
+        sequence, route, _, _ = get_delivery_sequence(cluster_df, source_lat, source_long)
+        full_route = [(source_lat, source_long)] + route + [(source_lat, source_long)]
+        total_distance = calculate_route_distance(full_route)
+        est_route_distance = calculate_route_distance([(source_lat, source_long)] + route)
+        first_to_last_distance = calculate_distance_km(route[0][0], route[0][1], route[-1][0], route[-1][1]) if len(route) >= 2 else 0.0
+        total_society_distance = calculate_route_distance(route)
+        valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
+        delivery_path = " -> ".join(sequence)
+        cost_per_order = round((van_cost + cee_cost) / total_orders, 2)
+
+        cluster_summary.append({
+            "Cluster ID": cluster,
+            "Hub ID": hub_id,
+            "Society IDs": ", ".join(map(str, society_ids)),
+            "Societies": ", ".join(societies),
+            "No. of Societies": num_societies,
+            "Total Orders": total_orders,
+            "Total Distance (km) incl. return": round(total_distance, 2),
+            "Est. Route Distance (no return, km)": round(est_route_distance, 2),
+            "Dist. from First to Last Society (km)": round(first_to_last_distance, 2),
+            "Total Distance Between All Societies (km)": round(total_society_distance, 2),
+            "Max Distance from Seed (km)": round(max_dist, 2),
+            "Valid Cluster (180 to 220 Orders & <2km)": valid_cluster,
+            "Delivery Sequence": delivery_path,
+            "Cost Per Order (₹)": cost_per_order
+        })
+
+    cluster_summary_df = pd.DataFrame(cluster_summary)
+
+    st.sidebar.subheader("Cluster Type to View")
+    cluster_type = st.sidebar.radio("Choose Cluster Type", ["All", "Valid Only", "Invalid Only"])
+
+    if cluster_type == "Valid Only":
+        cluster_summary_df = cluster_summary_df[cluster_summary_df["Valid Cluster (180 to 220 Orders & <2km)"] == True]
+    elif cluster_type == "Invalid Only":
+        cluster_summary_df = cluster_summary_df[cluster_summary_df["Valid Cluster (180 to 220 Orders & <2km)"] == False]
+
+    st.sidebar.subheader("Select Cluster to View")
+    cluster_options = cluster_summary_df.apply(lambda row: f"Cluster {row['Cluster ID']} ({row['No. of Societies']} Societies)", axis=1).tolist()
+    selected_option = st.sidebar.selectbox("Choose a Cluster", cluster_options)
+    selected_cluster_id = int(selected_option.split()[1])
+
+    selected_cluster_df = df[df['Cluster'] == selected_cluster_id]
+    selected_summary = cluster_summary_df[cluster_summary_df['Cluster ID'] == selected_cluster_id]
+    sequence, route, distances, _ = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
+
+    st.subheader("Cluster Details Summary")
+    for col, val in selected_summary.iloc[0].items():
+        st.markdown(f"**{col}**: {val}")
+
+    st.subheader(f"Map for Cluster {selected_cluster_id}")
+    cluster_map = folium.Map(location=[source_lat, source_long], zoom_start=13)
+    folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(cluster_map)
+    for i, (soc_name, coord) in enumerate(zip(sequence[:-1], route)):
+        Marker(coord, popup=f"{soc_name} (S{i+1})", icon=folium.Icon(color='blue')).add_to(cluster_map)
+        folium.map.Marker(
+            coord,
+            icon=DivIcon(
+                icon_size=(150, 36),
+                icon_anchor=(0, 0),
+                html=f'<div style="font-size: 12pt">S{i+1}</div>'
+            )
+        ).add_to(cluster_map)
+    PolyLine([(source_lat, source_long)] + route + [(source_lat, source_long)], color="blue", weight=2.5, opacity=1).add_to(cluster_map)
+    st_folium(cluster_map, width=700, height=500)
+
+    st.subheader("Cluster Summary Table")
+    st.dataframe(selected_summary)
+
+    csv = cluster_summary_df.to_csv(index=False).encode('utf-8')
+    st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv", mime='text/csv')
