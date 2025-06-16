@@ -73,7 +73,7 @@ def get_delivery_sequence(cluster_df, depot_lat, depot_long):
 def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
     return calculate_distance_km(seed_coord[0], seed_coord[1], coord[0], coord[1]) <= max_dist_km
 
-st.title("RK - Societies Delivery Clustering and Sequencing Tool")
+st.title("RK - Societies Delivery Clustering Tool")
 
 # Sidebar source location input
 st.sidebar.subheader("Supply Source Location")
@@ -86,6 +86,10 @@ source_long = st.sidebar.number_input("Depot Longitude", value=def_long, format=
 st.sidebar.subheader("Cost Settings")
 van_cost = st.sidebar.number_input("Van Cost (₹)", value=834, step=1)
 cee_cost = st.sidebar.number_input("CEE Cost (₹)", value=333, step=1)
+
+# Sidebar cluster filter option
+st.sidebar.subheader("Cluster Filters")
+show_only_valid = st.sidebar.checkbox("Show only valid clusters", value=False)
 
 # Template file download
 st.subheader("Download Template")
@@ -122,8 +126,9 @@ if uploaded_file is not None:
                 if cluster_orders + candidate['Orders'] <= 220 and is_within_seed_radius(seed_coord, candidate_coord):
                     cluster_members.append(idx)
                     cluster_orders += candidate['Orders']
-            df.loc[cluster_members, 'Cluster'] = cluster_id
-            cluster_id += 1
+            if cluster_orders >= 180:
+                df.loc[cluster_members, 'Cluster'] = cluster_id
+                cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
         if attempt == max_attempts:
             st.warning(f"Cluster creation hit max attempts for Hub ID {hub}. Remaining unassigned societies may exist.")
@@ -145,7 +150,7 @@ if uploaded_file is not None:
         est_route_distance = calculate_route_distance([(source_lat, source_long)] + route)
         first_to_last_distance = calculate_distance_km(route[0][0], route[0][1], route[-1][0], route[-1][1]) if len(route) >= 2 else 0.0
         total_society_distance = calculate_route_distance(route)
-        valid_cluster = "Yes" if 180 <= total_orders <= 220 and max_dist <= 2.0 else "No"
+        valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
         delivery_path = " -> ".join(sequence)
         cost_per_order = round((van_cost + cee_cost) / total_orders, 2)
 
@@ -167,6 +172,9 @@ if uploaded_file is not None:
         })
 
     cluster_summary_df = pd.DataFrame(cluster_summary)
+    if show_only_valid:
+        cluster_summary_df = cluster_summary_df[cluster_summary_df["Valid Cluster (180 to 220 Orders & <2km)"] == True]
+
     st.sidebar.subheader("Select Cluster to View")
     cluster_options = cluster_summary_df.apply(lambda row: f"Cluster {row['Cluster ID']} ({row['No. of Societies']} Societies)", axis=1).tolist()
     selected_option = st.sidebar.selectbox("Choose a Cluster", cluster_options)
