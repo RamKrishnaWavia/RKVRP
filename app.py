@@ -126,8 +126,9 @@ if uploaded_file is not None:
                 if cluster_orders + candidate['Orders'] <= 220 and is_within_seed_radius(seed_coord, candidate_coord):
                     cluster_members.append(idx)
                     cluster_orders += candidate['Orders']
-            df.loc[cluster_members, 'Cluster'] = cluster_id
-            cluster_id += 1
+            if cluster_orders >= 180:
+                df.loc[cluster_members, 'Cluster'] = cluster_id
+                cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
 
     df_valid_clusters = df.copy()
