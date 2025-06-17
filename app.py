@@ -10,132 +10,208 @@ from io import StringIO
 import random
 import logging
 
-# Set logging level
+# Set logging level to ERROR to suppress warning-level logs
 logging.basicConfig(level=logging.ERROR)
 
-# Helper to calculate distance between two points
+# Helper to calculate route distance in km
+def calculate_route_distance(route):
+    distance = 0.0
+    for i in range(len(route) - 1):
+        distance += calculate_distance_km(route[i][0], route[i][1], route[i+1][0], route[i+1][1])
+    return distance
+
+# Helper to calculate distance between two lat/long points using Haversine formula
 def calculate_distance_km(lat1, lon1, lat2, lon2):
     R = 6371.0
-    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-    dlat, dlon = lat2 - lat1, lon2 - lon1
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    return round(R * 2 * atan2(sqrt(a), sqrt(1 - a)), 2)
+    lat1_rad = radians(lat1)
+    lon1_rad = radians(lon1)
+    lat2_rad = radians(lat2)
+    lon2_rad = radians(lon2)
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    a = sin(dlat / 2)**2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return round(R * c, 2)
 
-def is_within_radius(coord1, coord2, radius=2.0):
-    return calculate_distance_km(*coord1, *coord2) <= radius
-
-def cluster_societies(df, min_orders=180):
-    clusters = []
-    used = set()
-    cluster_id = 1
-    for i, row in df.iterrows():
-        if i in used:
-            continue
-        seed = (row['Latitude'], row['Longitude'])
-        members = [i]
-        total_orders = row['Orders']
-        for j, other in df.iterrows():
-            if j != i and j not in used:
-                coord = (other['Latitude'], other['Longitude'])
-                if is_within_radius(seed, coord):
-                    members.append(j)
-                    total_orders += other['Orders']
-                    if total_orders >= min_orders:
-                        break
-        if total_orders >= min_orders:
-            for idx in members:
-                df.at[idx, 'Cluster_ID'] = cluster_id
-                df.at[idx, 'Cluster_Type'] = 'Green'
-                used.update(members)
-            cluster_id += 1
-    # Remaining as blue or unclustered
-    for i in df.index:
-        if pd.isna(df.at[i, 'Cluster_ID']):
-            df.at[i, 'Cluster_ID'] = cluster_id
-            df.at[i, 'Cluster_Type'] = 'Blue'
-            cluster_id += 1
-    return df
-
+# Optimized delivery sequence from first society using nearest neighbor heuristic
 def get_delivery_sequence(cluster_df, depot_lat, depot_long):
     points = cluster_df[['Latitude', 'Longitude']].values.tolist()
     names = cluster_df['Society'].tolist()
-    orders = cluster_df['Orders'].tolist()
+    if len(points) == 1:
+        sequence = [f"{names[0]} (0 km)", "Total Distance: 0.0 km"]
+        return sequence, [points[0]], [0.0], []
     visited = [False] * len(points)
-    sequence, order, distances = [], [], []
-    current_index = 0
+    sequence = []
+    order = []
+    distances = []
+    inefficiencies = []
+    current_index = 0  # Start from the first society
     current_point = points[current_index]
     visited[current_index] = True
-    sequence.append(f"{names[current_index]} - {orders[current_index]} orders (0 km)")
+    sequence.append(f"{names[current_index]} (0 km)")
     order.append(current_point)
     distances.append(0)
+
     for _ in range(len(points) - 1):
-        min_dist, next_index = float('inf'), -1
-        for i, point in enumerate(points):
+        min_dist = float('inf')
+        next_index = -1
+        for i in range(len(points)):
             if not visited[i]:
-                dist = calculate_distance_km(*current_point, *point)
+                dist = calculate_distance_km(current_point[0], current_point[1], points[i][0], points[i][1])
                 if dist < min_dist:
-                    min_dist, next_index = dist, i
+                    min_dist = dist
+                    next_index = i
         if next_index == -1:
             break
         visited[next_index] = True
-        current_point = points[next_index]
-        sequence.append(f"{names[next_index]} - {orders[next_index]} orders ({min_dist} km)")
+        inefficiency_flag = " 🚩" if min_dist > 1.5 else ""
+        sequence.append(f"{names[next_index]} ({min_dist} km){inefficiency_flag}")
         distances.append(min_dist)
+        current_point = points[next_index]
         order.append(current_point)
-    sequence.append(f"Total Distance: {round(sum(distances), 2)} km")
-    return sequence, order, distances
 
-st.title("Milk Delivery Clustering Tool")
+    total_seq_distance = round(sum(distances), 2)
+    sequence.append(f"Total Distance: {total_seq_distance} km")
+    return sequence, order, distances, inefficiencies
 
-sample_csv = """Society_ID,Society,Latitude,Longitude,Orders
-1001,Alpha,12.9611,77.6387,90
-1002,Beta,12.9632,77.6401,110
-1003,Gamma,12.9644,77.6423,30
-1004,Delta,12.9688,77.6478,75
-1005,Epsilon,12.9712,77.6499,65
-1006,Zeta,12.9741,77.6551,80
-"""
+# Check if candidate is within 2km from seed
+def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
+    return calculate_distance_km(seed_coord[0], seed_coord[1], coord[0], coord[1]) <= max_dist_km
 
-st.download_button("Download Sample CSV", sample_csv, "sample_societies.csv")
+st.title("RK - Societies Clustering and Delivery Sequencing Tool")
 
-uploaded_file = st.file_uploader("Upload society order file (CSV)", type="csv")
-if uploaded_file:
+# Sidebar source location input
+def_lat = 12.989708618922553
+def_long = 77.78625342251868
+source_lat = st.sidebar.number_input("Depot Latitude", value=def_lat, format="%.8f")
+source_long = st.sidebar.number_input("Depot Longitude", value=def_long, format="%.8f")
+
+# Sidebar cost settings
+st.sidebar.subheader("Cost Settings")
+van_cost = st.sidebar.number_input("Van Cost (₹)", value=834, step=1)
+cee_cost = st.sidebar.number_input("CEE Cost (₹)", value=333, step=1)
+
+# Template file download
+st.subheader("Download Template")
+template = pd.DataFrame({"Society ID": [], "Society": [], "Latitude": [], "Longitude": [], "Orders": [], "Hub ID": []})
+st.download_button("Download Template CSV", data=template.to_csv(index=False), file_name="society_template.csv")
+
+# File upload
+st.subheader("Upload Society Data")
+uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+
+if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
-    df['Cluster_ID'] = np.nan
-    df['Cluster_Type'] = ""
-    depot_lat = st.number_input("Enter Depot Latitude", value=12.9611)
-    depot_lon = st.number_input("Enter Depot Longitude", value=77.6387)
-    df = cluster_societies(df)
-    st.success("Clustering complete.")
+    st.success("Society data uploaded successfully.")
 
-    cluster_options = sorted(df['Cluster_ID'].unique())
-    selected_id = st.selectbox("Select Cluster ID to view", cluster_options)
-    selected_df = df[df['Cluster_ID'] == selected_id].reset_index(drop=True)
+    df = df.sort_values(by='Orders', ascending=False).reset_index(drop=True)
+    df['Cluster'] = -1
+    cluster_id = 0
 
-    st.subheader(f"Cluster {selected_id} - {selected_df['Cluster_Type'][0]}")
-    st.dataframe(selected_df)
+    for hub in df['Hub ID'].unique():
+        hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
+        max_attempts = 100
+        attempt = 0
+        while (hub_df['Cluster'] == -1).any() and attempt < max_attempts:
+            attempt += 1
+            unassigned = hub_df[hub_df['Cluster'] == -1]
+            seed_idx = unassigned.index[0]
+            seed = df.loc[seed_idx]
+            seed_coord = (seed['Latitude'], seed['Longitude'])
+            cluster_members = [seed_idx]
+            cluster_orders = seed['Orders']
+            for idx in unassigned.index[1:]:
+                candidate = df.loc[idx]
+                candidate_coord = (candidate['Latitude'], candidate['Longitude'])
+                if cluster_orders + candidate['Orders'] <= 220 and is_within_seed_radius(seed_coord, candidate_coord):
+                    cluster_members.append(idx)
+                    cluster_orders += candidate['Orders']
+            if cluster_orders >= 180:
+                df.loc[cluster_members, 'Cluster'] = cluster_id
+                cluster_id += 1
+            hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
 
-    seq, route, dists = get_delivery_sequence(selected_df, depot_lat, depot_lon)
-    st.write("Delivery Sequence:")
-    for line in seq:
-        st.markdown(f"- {line}")
+    df_valid_clusters = df.copy()
+    cluster_summary = []
 
-    m = folium.Map(location=[depot_lat, depot_lon], zoom_start=13)
-    folium.Marker([depot_lat, depot_lon], popup="Depot", icon=folium.Icon(color='green')).add_to(m)
+    for cluster in sorted(df_valid_clusters['Cluster'].unique()):
+        cluster_df = df_valid_clusters[df_valid_clusters['Cluster'] == cluster]
+        hub_id = cluster_df['Hub ID'].iloc[0]
+        society_ids = list(cluster_df['Society ID'])
+        societies = list(cluster_df['Society'])
+        num_societies = len(cluster_df)
+        total_orders = cluster_df['Orders'].sum()
+        seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
+        max_dist = max(calculate_distance_km(seed_coord[0], seed_coord[1], row['Latitude'], row['Longitude']) for _, row in cluster_df.iterrows()) if num_societies > 1 else 0
+        sequence, route, _, _ = get_delivery_sequence(cluster_df, source_lat, source_long)
+        full_route = [(source_lat, source_long)] + route + [(source_lat, source_long)]
+        total_distance = calculate_route_distance(full_route)
+        est_route_distance = calculate_route_distance([(source_lat, source_long)] + route)
+        first_to_last_distance = calculate_distance_km(route[0][0], route[0][1], route[-1][0], route[-1][1]) if len(route) >= 2 else 0.0
+        total_society_distance = calculate_route_distance(route)
+        valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
+        cluster_type = "Valid Cluster" if valid_cluster else ("Unclustered" if cluster == -1 else "Invalid Cluster")
+        delivery_path = " -> ".join(sequence)
+        cost_per_order = round((van_cost + cee_cost) / total_orders, 2) if total_orders > 0 else 0
 
-    full_route = [(depot_lat, depot_lon)] + route + [(depot_lat, depot_lon)]
-    for i in range(len(full_route) - 1):
-        start, end = full_route[i], full_route[i+1]
-        d = calculate_distance_km(*start, *end)
-        PolyLine([start, end], color="blue").add_to(m)
-        mid = [(start[0]+end[0])/2, (start[1]+end[1])/2]
-        folium.Marker(mid, icon=DivIcon(icon_size=(150,36), html=f'<div style="font-size:10pt; color:red">{d} km</div>')).add_to(m)
+        cluster_summary.append({
+            "Cluster ID": cluster,
+            "Cluster Type": cluster_type,
+            "Hub ID": hub_id,
+            "Society IDs": ", ".join(map(str, society_ids)),
+            "Societies": ", ".join(societies),
+            "No. of Societies": num_societies,
+            "Total Orders": total_orders,
+            "Total Distance (km) incl. return": round(total_distance, 2),
+            "Est. Route Distance (no return, km)": round(est_route_distance, 2),
+            "Dist. from First to Last Society (km)": round(first_to_last_distance, 2),
+            "Total Distance Between All Societies (km)": round(total_society_distance, 2),
+            "Max Distance from Seed (km)": round(max_dist, 2),
+            "Delivery Sequence": delivery_path,
+            "Cost Per Order (₹)": cost_per_order,
+            "Cluster Type": cluster_type
+        })
 
-    for i, (idx, row) in enumerate(selected_df.iterrows()):
-        coord = (row['Latitude'], row['Longitude'])
-        Marker(coord, popup=f"{row['Society']} - {row['Orders']} orders", icon=folium.Icon(color='blue')).add_to(m)
-        folium.Marker(coord, icon=DivIcon(icon_size=(150,36), html=f'<div style="font-size:12pt">S{i+1}</div>')).add_to(m)
+    cluster_summary_df = pd.DataFrame(cluster_summary)
 
-    st_folium(m, height=500)
+    st.sidebar.subheader("Cluster Type to View")
+    cluster_type_filter = st.sidebar.radio("Choose Cluster Type", ["All", "Valid Cluster", "Invalid Cluster", "Unclustered"])
+    if cluster_type_filter != "All":
+        cluster_summary_df = cluster_summary_df[cluster_summary_df['Cluster Type'] == cluster_type_filter]
 
-    st.download_button("Download Cluster Data", df.to_csv(index=False), file_name="clustered_societies.csv")
+    st.sidebar.subheader("Select Cluster to View")
+    cluster_options = cluster_summary_df.apply(
+        lambda row: f"Cluster {row['Cluster ID']} ({row['Cluster Type']}, {row['No. of Societies']} Societies)", axis=1).tolist()
+    selected_option = st.sidebar.selectbox("Choose a Cluster", cluster_options)
+    selected_cluster_id = int(selected_option.split()[1])
+
+    selected_cluster_df = df[df['Cluster'] == selected_cluster_id]
+    selected_summary = cluster_summary_df[cluster_summary_df['Cluster ID'] == selected_cluster_id]
+
+    sequence, route, distances, _ = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
+
+    st.subheader("Cluster Details Summary")
+    for col, val in selected_summary.iloc[0].items():
+        st.markdown(f"**{col}**: {val}")
+
+    st.subheader(f"Map for Cluster {selected_cluster_id}")
+    cluster_map = folium.Map(location=[source_lat, source_long], zoom_start=13)
+    folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(cluster_map)
+    for i, (soc_name, coord) in enumerate(zip(sequence[:-1], route)):
+        Marker(coord, popup=f"{soc_name} (S{i+1})", icon=folium.Icon(color='blue')).add_to(cluster_map)
+        folium.map.Marker(
+            coord,
+            icon=DivIcon(
+                icon_size=(150, 36),
+                icon_anchor=(0, 0),
+                html=f'<div style="font-size: 12pt">S{i+1}</div>'
+            )
+        ).add_to(cluster_map)
+    PolyLine([(source_lat, source_long)] + route + [(source_lat, source_long)], color="blue", weight=2.5, opacity=1).add_to(cluster_map)
+    st_folium(cluster_map, width=700, height=500)
+
+    st.subheader("Cluster Summary Table")
+    st.dataframe(selected_summary)
+
+    csv = cluster_summary_df.to_csv(index=False).encode('utf-8')
+    st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv", mime='text/csv')
