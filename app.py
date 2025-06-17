@@ -81,7 +81,6 @@ def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
 st.title("RK - Societies Delivery Clustering Tool")
 
 # Sidebar source location input
-st.sidebar.subheader("Supply Source Location")
 def_lat = 12.989708618922553
 def_long = 77.78625342251868
 source_lat = st.sidebar.number_input("Depot Latitude", value=def_lat, format="%.8f")
@@ -127,17 +126,14 @@ if uploaded_file is not None:
                 if cluster_orders + candidate['Orders'] <= 220 and is_within_seed_radius(seed_coord, candidate_coord):
                     cluster_members.append(idx)
                     cluster_orders += candidate['Orders']
-            if cluster_orders >= 180:
-                df.loc[cluster_members, 'Cluster'] = cluster_id
-                cluster_id += 1
+            df.loc[cluster_members, 'Cluster'] = cluster_id
+            cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
 
-    df_valid_clusters = df[df['Cluster'] != -1]
+    df_valid_clusters = df.copy()
     cluster_summary = []
 
     for cluster in sorted(df_valid_clusters['Cluster'].unique()):
-        if cluster == -1:
-            continue
         cluster_df = df_valid_clusters[df_valid_clusters['Cluster'] == cluster]
         hub_id = cluster_df['Hub ID'].iloc[0]
         society_ids = list(cluster_df['Society ID'])
@@ -145,21 +141,21 @@ if uploaded_file is not None:
         num_societies = len(cluster_df)
         total_orders = cluster_df['Orders'].sum()
         seed_coord = (cluster_df.iloc[0]['Latitude'], cluster_df.iloc[0]['Longitude'])
-        max_dist = max(calculate_distance_km(seed_coord[0], seed_coord[1], row['Latitude'], row['Longitude']) for _, row in cluster_df.iterrows())
+        max_dist = max(calculate_distance_km(seed_coord[0], seed_coord[1], row['Latitude'], row['Longitude']) for _, row in cluster_df.iterrows()) if num_societies > 1 else 0
         sequence, route, _, _ = get_delivery_sequence(cluster_df, source_lat, source_long)
-        if not route:
-            continue
         full_route = [(source_lat, source_long)] + route + [(source_lat, source_long)]
         total_distance = calculate_route_distance(full_route)
         est_route_distance = calculate_route_distance([(source_lat, source_long)] + route)
         first_to_last_distance = calculate_distance_km(route[0][0], route[0][1], route[-1][0], route[-1][1]) if len(route) >= 2 else 0.0
         total_society_distance = calculate_route_distance(route)
         valid_cluster = 180 <= total_orders <= 220 and max_dist <= 2.0
+        cluster_type = "Valid Cluster" if valid_cluster else ("Unclustered" if cluster == -1 else "Invalid Cluster")
         delivery_path = " -> ".join(sequence)
-        cost_per_order = round((van_cost + cee_cost) / total_orders, 2)
+        cost_per_order = round((van_cost + cee_cost) / total_orders, 2) if total_orders > 0 else 0
 
         cluster_summary.append({
             "Cluster ID": cluster,
+            "Cluster Type": cluster_type,
             "Hub ID": hub_id,
             "Society IDs": ", ".join(map(str, society_ids)),
             "Societies": ", ".join(societies),
@@ -170,7 +166,6 @@ if uploaded_file is not None:
             "Dist. from First to Last Society (km)": round(first_to_last_distance, 2),
             "Total Distance Between All Societies (km)": round(total_society_distance, 2),
             "Max Distance from Seed (km)": round(max_dist, 2),
-            "Valid Cluster (180 to 220 Orders & <2km)": valid_cluster,
             "Delivery Sequence": delivery_path,
             "Cost Per Order (₹)": cost_per_order
         })
@@ -178,50 +173,43 @@ if uploaded_file is not None:
     cluster_summary_df = pd.DataFrame(cluster_summary)
 
     st.sidebar.subheader("Cluster Type to View")
-    cluster_type = st.sidebar.radio("Choose Cluster Type", ["All", "Valid Only", "Invalid Only"])
-
-    if cluster_type == "Valid Only":
-        cluster_summary_df = cluster_summary_df[cluster_summary_df["Valid Cluster (180 to 220 Orders & <2km)"] == True]
-    elif cluster_type == "Invalid Only":
-        cluster_summary_df = cluster_summary_df[cluster_summary_df["Valid Cluster (180 to 220 Orders & <2km)"] == False]
+    cluster_type_filter = st.sidebar.radio("Choose Cluster Type", ["All", "Valid Cluster", "Invalid Cluster", "Unclustered"])
+    if cluster_type_filter != "All":
+        cluster_summary_df = cluster_summary_df[cluster_summary_df['Cluster Type'] == cluster_type_filter]
 
     st.sidebar.subheader("Select Cluster to View")
     cluster_options = cluster_summary_df.apply(
-        lambda row: f"Cluster {row['Cluster ID']} ({row['No. of Societies']} Societies)", axis=1).tolist()
+        lambda row: f"Cluster {row['Cluster ID']} ({row['Cluster Type']}, {row['No. of Societies']} Societies)", axis=1).tolist()
     selected_option = st.sidebar.selectbox("Choose a Cluster", cluster_options)
     selected_cluster_id = int(selected_option.split()[1])
 
-    if selected_cluster_id == -1:
-        st.warning("Cluster -1 includes unassigned or invalid societies and is not a valid cluster.")
-    else:
-        selected_cluster_df = df[df['Cluster'] == selected_cluster_id]
-        selected_summary = cluster_summary_df[cluster_summary_df['Cluster ID'] == selected_cluster_id]
+    selected_cluster_df = df[df['Cluster'] == selected_cluster_id]
+    selected_summary = cluster_summary_df[cluster_summary_df['Cluster ID'] == selected_cluster_id]
 
-        if selected_summary.iloc[0]['Valid Cluster (180 to 220 Orders & <2km)']:
-            sequence, route, distances, _ = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
+    sequence, route, distances, _ = get_delivery_sequence(selected_cluster_df, source_lat, source_long)
 
-            st.subheader("Cluster Details Summary")
-            for col, val in selected_summary.iloc[0].items():
-                st.markdown(f"**{col}**: {val}")
+    st.subheader("Cluster Details Summary")
+    for col, val in selected_summary.iloc[0].items():
+        st.markdown(f"**{col}**: {val}")
 
-            st.subheader(f"Map for Cluster {selected_cluster_id}")
-            cluster_map = folium.Map(location=[source_lat, source_long], zoom_start=13)
-            folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(cluster_map)
-            for i, (soc_name, coord) in enumerate(zip(sequence[:-1], route)):
-                Marker(coord, popup=f"{soc_name} (S{i+1})", icon=folium.Icon(color='blue')).add_to(cluster_map)
-                folium.map.Marker(
-                    coord,
-                    icon=DivIcon(
-                        icon_size=(150, 36),
-                        icon_anchor=(0, 0),
-                        html=f'<div style="font-size: 12pt">S{i+1}</div>'
-                    )
-                ).add_to(cluster_map)
-            PolyLine([(source_lat, source_long)] + route + [(source_lat, source_long)], color="blue", weight=2.5, opacity=1).add_to(cluster_map)
-            st_folium(cluster_map, width=700, height=500)
+    st.subheader(f"Map for Cluster {selected_cluster_id}")
+    cluster_map = folium.Map(location=[source_lat, source_long], zoom_start=13)
+    folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color='green')).add_to(cluster_map)
+    for i, (soc_name, coord) in enumerate(zip(sequence[:-1], route)):
+        Marker(coord, popup=f"{soc_name} (S{i+1})", icon=folium.Icon(color='blue')).add_to(cluster_map)
+        folium.map.Marker(
+            coord,
+            icon=DivIcon(
+                icon_size=(150, 36),
+                icon_anchor=(0, 0),
+                html=f'<div style="font-size: 12pt">S{i+1}</div>'
+            )
+        ).add_to(cluster_map)
+    PolyLine([(source_lat, source_long)] + route + [(source_lat, source_long)], color="blue", weight=2.5, opacity=1).add_to(cluster_map)
+    st_folium(cluster_map, width=700, height=500)
 
-            st.subheader("Cluster Summary Table")
-            st.dataframe(selected_summary)
+    st.subheader("Cluster Summary Table")
+    st.dataframe(selected_summary)
 
     csv = cluster_summary_df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Cluster Summary CSV", data=csv, file_name="cluster_summary.csv", mime='text/csv')
