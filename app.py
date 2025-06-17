@@ -168,7 +168,8 @@ if uploaded_file is not None:
             "Total Distance Between All Societies (km)": round(total_society_distance, 2),
             "Max Distance from Seed (km)": round(max_dist, 2),
             "Delivery Sequence": delivery_path,
-            "Cost Per Order (₹)": cost_per_order
+            "Cost Per Order (₹)": cost_per_order,
+            "Cluster Type": cluster_type
         })
 
     cluster_summary_df = pd.DataFrame(cluster_summary)
