@@ -105,16 +105,29 @@ else:
     st.stop()
 
 summary_rows = []
+cluster_metrics = []
 for cluster_id in df['Cluster ID'].unique():
     cluster_data = df[df['Cluster ID'] == cluster_id]
     cluster_type = cluster_data['Cluster Type'].iloc[0]
+    total_orders = sum(cluster_data['Orders'])
+    num_societies = len(cluster_data)
     cost = 0
     if cluster_type == "main":
-        cost = main_vehicle_cost / max(sum(cluster_data['Orders']), 1)
+        cost = main_vehicle_cost / max(total_orders, 1)
     elif cluster_type == "micro":
-        cost = (micro_van_cost + micro_cee_cost) / max(sum(cluster_data['Orders']), 1)
+        cost = (micro_van_cost + micro_cee_cost) / max(total_orders, 1)
 
     sequence, route_points, dists, total_dist, delivery_path = get_delivery_sequence(cluster_data, depot_lat, depot_long)
+
+    cluster_metrics.append({
+        "Cluster ID": cluster_id,
+        "Cluster Type": cluster_type,
+        "No of Societies": num_societies,
+        "Total Orders": total_orders,
+        "Total Distance (km)": total_dist,
+        "CPO (₹)": round(cost, 2),
+        "Delivery Sequence": delivery_path
+    })
 
     for i, row in cluster_data.iterrows():
         summary_rows.append({
@@ -130,6 +143,7 @@ for cluster_id in df['Cluster ID'].unique():
         })
 
 summary_df = pd.DataFrame(summary_rows)
+metrics_df = pd.DataFrame(cluster_metrics)
 
 main_summary_df = summary_df[summary_df['Cluster Type'] == 'main']
 micro_summary_df = summary_df[summary_df['Cluster Type'] == 'micro']
@@ -137,6 +151,7 @@ micro_summary_df = summary_df[summary_df['Cluster Type'] == 'micro']
 st.subheader("Download Summary Files")
 st.download_button("Download Main Cluster Summary", main_summary_df.to_csv(index=False), file_name="main_cluster_summary.csv")
 st.download_button("Download Micro Cluster Summary", micro_summary_df.to_csv(index=False), file_name="micro_cluster_summary.csv")
+st.download_button("Download Cluster Metrics Summary", metrics_df.to_csv(index=False), file_name="cluster_metrics_summary.csv")
 
 # Display Main Cluster Map
 if main_cluster_id:
@@ -166,3 +181,6 @@ if micro_cluster_id:
 
 st.subheader("Cluster Summary View")
 st.dataframe(summary_df)
+
+st.subheader("Cluster Metrics Summary View")
+st.dataframe(metrics_df)
