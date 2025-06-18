@@ -89,7 +89,7 @@ def run_clustering(df, depot_lat, depot_lon, costs):
 
 def create_summary_df(clusters, depot_coord):
     """
-    Creates the summary DataFrame with a detailed, human-readable delivery sequence AND internal distance.
+    Creates the summary DataFrame with the new continuous-chain delivery sequence format.
     """
     summary_rows = []
     for c in clusters:
@@ -99,28 +99,34 @@ def create_summary_df(clusters, depot_coord):
         id_to_name = {s['Society ID']: s['Society Name'] for s in c['Societies']}
         id_to_coord = {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
         
-        # --- NEW: Calculate Internal Distance ---
         internal_distance = 0.0
-        if len(c['Path']) > 1: # Only calculate if there is more than one society
-            # Sum the distances between consecutive points in the path
+        if len(c['Path']) > 1:
             for i in range(len(c['Path']) - 1):
-                coord1 = id_to_coord[c['Path'][i]]
-                coord2 = id_to_coord[c['Path'][i+1]]
-                internal_distance += haversine(coord1, coord2)
+                internal_distance += haversine(id_to_coord[c['Path'][i]], id_to_coord[c['Path'][i+1]])
 
-        # --- Build Detailed Delivery Sequence String (Unchanged) ---
-        delivery_sequence_str = ""
+        # --- NEW: Build the continuous-chain delivery sequence string ---
+        delivery_sequence_str = "Depot"
         if c['Path']:
-            journey_names = ['Depot'] + [id_to_name.get(sid, str(sid)) for sid in c['Path']]
-            journey_coords = [depot_coord] + [id_to_coord.get(sid) for sid in c['Path']]
-            sequence_parts = [f"{journey_names[i]} -> {journey_names[i+1]} ({haversine(journey_coords[i], journey_coords[i+1]):.2f} km)" for i in range(len(journey_coords) - 1)]
-            sequence_parts.append(f"{journey_names[-1]} -> Depot ({haversine(journey_coords[-1], depot_coord):.2f} km)")
-            delivery_sequence_str = ' | '.join(sequence_parts)
-        else:
-            # Handle single-society clusters
-            society_name = c['Societies'][0]['Society Name']
-            dist = haversine(depot_coord, id_to_coord[c['Societies'][0]['Society ID']])
-            delivery_sequence_str = f"Depot -> {society_name} ({dist:.2f} km) | {society_name} -> Depot ({dist:.2f} km)"
+            # Create a list of all nodes in the journey: (name, coordinate)
+            nodes = [("Depot", depot_coord)] + [(id_to_name.get(sid), id_to_coord.get(sid)) for sid in c['Path']]
+            
+            # Loop through each leg of the journey from the first society onwards
+            for i in range(1, len(nodes)):
+                start_coord = nodes[i-1][1]
+                end_name = nodes[i][0]
+                end_coord = nodes[i][1]
+                dist = haversine(start_coord, end_coord)
+                delivery_sequence_str += f" -> {end_name} ({dist:.2f} km)"
+
+            # Add the final leg back to the depot
+            last_node_coord = nodes[-1][1]
+            dist_to_depot = haversine(last_node_coord, depot_coord)
+            delivery_sequence_str += f" -> Depot ({dist_to_depot:.2f} km)"
+        else: # Handle single-society clusters
+             society_name = c['Societies'][0]['Society Name']
+             society_coord = id_to_coord[c['Societies'][0]['Society ID']]
+             dist = haversine(depot_coord, society_coord)
+             delivery_sequence_str = f"Depot -> {society_name} ({dist:.2f} km) -> Depot ({dist:.2f} km)"
 
         summary_rows.append({
             'Cluster ID': c['Cluster ID'],
@@ -128,7 +134,7 @@ def create_summary_df(clusters, depot_coord):
             'No. of Societies': len(c['Societies']),
             'Total Orders': total_orders,
             'Total Distance (km)': c['Distance'],
-            'Internal Distance (km)': round(internal_distance, 2), # NEW COLUMN
+            'Internal Distance (km)': round(internal_distance, 2),
             'CPO (₹)': round(cpo, 2),
             'Delivery Sequence': delivery_sequence_str,
         })
@@ -194,7 +200,6 @@ if st.session_state.get('clusters') is not None:
     
     summary_df = create_summary_df(clusters, depot_coord) 
     st.header("📊 Cluster Summary")
-    # Define column order for better readability
     column_order = ['Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 'Total Distance (km)', 'Internal Distance (km)', 'CPO (₹)', 'Delivery Sequence']
     st.dataframe(summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
     
