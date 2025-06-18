@@ -116,18 +116,26 @@ if uploaded_file is not None:
             seed_coord = (seed['Latitude'], seed['Longitude'])
             cluster_members = [seed_idx]
             cluster_orders = seed['Orders']
+            current_points = [[seed['Latitude'], seed['Longitude']]]
             for idx in unassigned.index[1:]:
                 candidate = df.loc[idx]
                 candidate_coord = (candidate['Latitude'], candidate['Longitude'])
                 if cluster_orders + candidate['Orders'] <= 220 and is_within_seed_radius(seed_coord, candidate_coord):
-                    cluster_members.append(idx)
-                    cluster_orders += candidate['Orders']
+                    test_points = current_points + [[candidate['Latitude'], candidate['Longitude']]]
+                    route_distance = calculate_route_distance(test_points)
+                    if route_distance <= 10:
+                        cluster_members.append(idx)
+                        cluster_orders += candidate['Orders']
+                        current_points.append([candidate['Latitude'], candidate['Longitude']])
             if cluster_orders >= 180:
                 df.loc[cluster_members, 'Cluster'] = cluster_id
                 cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
 
-    # Micro cluster logic
+    # Micro cluster logic (non-destructive, 2km + 120 orders + 10km route distance from depot)
+    micro_cluster_id = 10000
+    df['Micro_Cluster'] = -1
+
     for hub in df['Hub ID'].unique():
         hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
         while not hub_df.empty:
@@ -137,12 +145,48 @@ if uploaded_file is not None:
             seed_coord = (seed['Latitude'], seed['Longitude'])
             cluster_members = [seed_idx]
             cluster_orders = seed['Orders']
+            current_points = [[source_lat, source_long], [seed['Latitude'], seed['Longitude']]]
+
             for idx in unassigned.index[1:]:
                 candidate = df.loc[idx]
-                candidate_coord = (candidate['Latitude'], candidate['Longitude'])
-                if cluster_orders + candidate['Orders'] <= 120 and is_within_seed_radius(seed_coord, candidate_coord):
-                    cluster_members.append(idx)
-                    cluster_orders += candidate['Orders']
-            df.loc[cluster_members, 'Cluster'] = cluster_id
-            cluster_id += 1
+                candidate_coord = [candidate['Latitude'], candidate['Longitude']]
+                if (cluster_orders + candidate['Orders'] <= 120 and
+                    is_within_seed_radius(seed_coord, candidate_coord) and
+                    calculate_distance_km(source_lat, source_long, candidate_coord[0], candidate_coord[1]) <= 10):
+
+                    test_points = current_points + [candidate_coord]
+                    route_distance = calculate_route_distance(test_points)
+                    if route_distance <= 10:
+                        cluster_members.append(idx)
+                        cluster_orders += candidate['Orders']
+                        current_points.append(candidate_coord)
+
+            df.loc[cluster_members, 'Micro_Cluster'] = micro_cluster_id
+            micro_cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
+
+    st.dataframe(df)
+
+    st.subheader("Micro-Cluster Route Maps and Cost Summary")
+    for micro_id in sorted(df['Micro_Cluster'].unique()):
+        if micro_id == -1:
+            continue
+        mcluster_df = df[df['Micro_Cluster'] == micro_id]
+        st.markdown(f"### Micro-Cluster {micro_id} (Orders: {mcluster_df['Orders'].sum()})")
+        seq, points, dists, _ = get_delivery_sequence(mcluster_df, source_lat, source_long)
+        st.text("\n".join(seq))
+
+        m = folium.Map(location=[source_lat, source_long], zoom_start=13)
+        folium.Marker([source_lat, source_long], popup="Depot", icon=folium.Icon(color="red")).add_to(m)
+
+        for i, row in mcluster_df.iterrows():
+            Marker([row['Latitude'], row['Longitude']], popup=row['Society'],
+                   icon=folium.Icon(color='blue')).add_to(m)
+        if len(points) > 1:
+            PolyLine(points, color="blue", weight=2.5).add_to(m)
+        st_folium(m, width=725)
+
+        total_orders = mcluster_df['Orders'].sum()
+        cost = van_cost + cee_cost
+        cpo = round(cost / total_orders, 2) if total_orders else 0
+        st.write(f"Total Orders: {total_orders}, Cost: ₹{cost}, Cost per Order: ₹{cpo}")
