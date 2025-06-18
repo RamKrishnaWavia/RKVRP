@@ -59,6 +59,7 @@ def get_distance_to_last_society(points, depot_coord):
     if not points:
         return 0.0
     
+    # We only need the path, not the full round-trip distance for this specific check
     path, _ = get_delivery_sequence(points, depot_coord)
     if not path:
         return 0.0
@@ -73,109 +74,129 @@ def get_distance_to_last_society(points, depot_coord):
 @st.cache_data
 def run_clustering(df, depot_lat, depot_lon, costs):
     """
-    Main clustering algorithm based on the new logic.
+    Corrected clustering algorithm with prioritized rule checking.
     """
     clusters = []
     cluster_id_counter = 1
     
-    # We will modify the DataFrame, so we create a mutable list of records
-    all_societies = df.to_dict('records')
-    unprocessed_societies = {s['Society ID']: s for s in all_societies}
+    unprocessed_societies = {s['Society ID']: s for s in df.to_dict('records')}
     depot_coord = (depot_lat, depot_lon)
     
     # Process hub by hub
     for hub_id in df['Hub ID'].unique():
+        hub_society_ids = {sid for sid, s in unprocessed_societies.items() if s['Hub ID'] == hub_id}
         
-        hub_societies_ids = {s['Society ID'] for s in all_societies if s['Hub ID'] == hub_id}
-        
-        # Keep trying to form clusters within this hub until no societies are left
-        while True:
-            # Find a seed from the remaining societies in the current hub
-            current_hub_unprocessed = {sid: s for sid, s in unprocessed_societies.items() if sid in hub_societies_ids}
-            if not current_hub_unprocessed:
-                break # No more societies to process in this hub
+        # Keep finding seeds until all societies in the hub are processed
+        while hub_society_ids:
+            # Pick a seed and remove it from this hub's pool to avoid re-processing
+            seed_id = hub_society_ids.pop()
+            seed = unprocessed_societies[seed_id]
             
-            # Use a society as a seed
-            seed_id, seed = next(iter(current_hub_unprocessed.items()))
-            
-            # --- Build a potential cluster around the seed ---
-            # All societies must be within 2km of the seed for Main/Mini
-            potential_cluster = [seed]
-            potential_orders = seed['Orders']
-            
-            # Find other societies in the hub that are close to the seed
-            additions = []
-            for other_id, other in current_hub_unprocessed.items():
-                if other_id == seed_id: continue
-                if haversine((seed['Latitude'], seed['Longitude']), (other['Latitude'], other['Longitude'])) < 2.0:
-                    additions.append(other)
-            
-            # Greedily add closest societies
-            additions.sort(key=lambda s: haversine((seed['Latitude'], seed['Longitude']), (s['Latitude'], s['Longitude'])))
-
-            for addition in additions:
-                # Add to cluster as long as it doesn't exceed the max possible order count
-                if potential_orders + addition['Orders'] <= 220: # Max for Main cluster
-                    potential_cluster.append(addition)
-                    potential_orders += addition['Orders']
-            
-            # --- Evaluate the built cluster against the rules (Main -> Mini -> Micro) ---
             cluster_formed = False
             
-            # 1. Check for MAIN Cluster
+            # --- ATTEMPT 1: FORM MAIN CLUSTER (180-220 orders, <2km proximity) ---
+            if 180 <= seed['Orders'] <= 220: # Optimization: if seed alone fits, form it
+                potential_cluster = [seed]
+                potential_orders = seed['Orders']
+            elif seed['Orders'] < 180: # Try to add more
+                potential_cluster = [seed]
+                potential_orders = seed['Orders']
+                neighbors = sorted(
+                    [unprocessed_societies[sid] for sid in hub_society_ids if haversine((seed['Latitude'], seed['Longitude']), (unprocessed_societies[sid]['Latitude'], unprocessed_societies[sid]['Longitude'])) < 2.0],
+                    key=lambda s: s['Orders'], reverse=True
+                )
+                for neighbor in neighbors:
+                    if potential_orders + neighbor['Orders'] <= 220:
+                        potential_cluster.append(neighbor)
+                        potential_orders += neighbor['Orders']
+            else: # Seed is > 220, cannot start a Main cluster
+                potential_orders = seed['Orders']
+
             if 180 <= potential_orders <= 220:
                 path, distance = get_delivery_sequence(potential_cluster, depot_coord)
                 clusters.append({
-                    'Cluster ID': f"Main-{cluster_id_counter}", 'Type': 'Main', 
-                    'Societies': potential_cluster, 'Orders': potential_orders, 
-                    'Distance': distance, 'Path': path, 'Cost': costs['main']
+                    'Cluster ID': f"Main-{cluster_id_counter}", 'Type': 'Main', 'Societies': potential_cluster, 
+                    'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs['main']
                 })
                 cluster_id_counter += 1
                 cluster_formed = True
 
-            # 2. Check for MINI Cluster (if not Main)
-            elif 121 <= potential_orders <= 179:
-                path, distance = get_delivery_sequence(potential_cluster, depot_coord)
-                clusters.append({
-                    'Cluster ID': f"Mini-{cluster_id_counter}", 'Type': 'Mini', 
-                    'Societies': potential_cluster, 'Orders': potential_orders, 
-                    'Distance': distance, 'Path': path, 'Cost': costs['mini']
-                })
-                cluster_id_counter += 1
-                cluster_formed = True
 
-            # 3. Check for MICRO Cluster (if not Main or Mini)
-            elif 1 <= potential_orders <= 120:
-                dist_to_last = get_distance_to_last_society(potential_cluster, depot_coord)
-                if dist_to_last < 15.0:
+            # --- ATTEMPT 2: FORM MINI CLUSTER (121-179 orders, <2km proximity) ---
+            if not cluster_formed:
+                if 121 <= seed['Orders'] <= 179:
+                    potential_cluster = [seed]
+                    potential_orders = seed['Orders']
+                elif seed['Orders'] < 121:
+                    potential_cluster = [seed]
+                    potential_orders = seed['Orders']
+                    neighbors = sorted(
+                        [unprocessed_societies[sid] for sid in hub_society_ids if haversine((seed['Latitude'], seed['Longitude']), (unprocessed_societies[sid]['Latitude'], unprocessed_societies[sid]['Longitude'])) < 2.0],
+                        key=lambda s: s['Orders'], reverse=True
+                    )
+                    for neighbor in neighbors:
+                        if potential_orders + neighbor['Orders'] <= 179:
+                            potential_cluster.append(neighbor)
+                            potential_orders += neighbor['Orders']
+                else:
+                    potential_orders = seed['Orders']
+
+                if 121 <= potential_orders <= 179:
                     path, distance = get_delivery_sequence(potential_cluster, depot_coord)
                     clusters.append({
-                        'Cluster ID': f"Micro-{cluster_id_counter}", 'Type': 'Micro', 
-                        'Societies': potential_cluster, 'Orders': potential_orders,
-                        'Distance': distance, 'Path': path, 'Cost': costs['micro']
+                        'Cluster ID': f"Mini-{cluster_id_counter}", 'Type': 'Mini', 'Societies': potential_cluster,
+                        'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs['mini']
                     })
                     cluster_id_counter += 1
                     cluster_formed = True
 
-            # --- Finalize ---
+            # --- ATTEMPT 3: FORM MICRO CLUSTER (1-120 orders, <15km depot-to-last) ---
+            if not cluster_formed:
+                if seed['Orders'] <= 120:
+                    potential_cluster = [seed]
+                    potential_orders = seed['Orders']
+                    # Micro cluster has no 2km proximity rule, can take any from hub
+                    neighbors = sorted(
+                        [unprocessed_societies[sid] for sid in hub_society_ids],
+                        key=lambda s: haversine(depot_coord, (s['Latitude'], s['Longitude'])) # Add closest from depot
+                    )
+                    for neighbor in neighbors:
+                        if potential_orders + neighbor['Orders'] <= 120:
+                            potential_cluster.append(neighbor)
+                            potential_orders += neighbor['Orders']
+
+                    # Check Micro's unique distance constraint
+                    dist_to_last = get_distance_to_last_society(potential_cluster, depot_coord)
+                    if dist_to_last < 15.0:
+                        path, distance = get_delivery_sequence(potential_cluster, depot_coord)
+                        clusters.append({
+                            'Cluster ID': f"Micro-{cluster_id_counter}", 'Type': 'Micro', 'Societies': potential_cluster,
+                            'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs['micro']
+                        })
+                        cluster_id_counter += 1
+                        cluster_formed = True
+
+            # --- FINALIZE AND CLEANUP ---
             if cluster_formed:
-                # Remove all used societies from the main pool
-                for society in potential_cluster:
-                    unprocessed_societies.pop(society['Society ID'], None)
+                # Remove all used societies from the main pool and the hub's pool
+                used_ids = {s['Society ID'] for s in potential_cluster}
+                for used_id in used_ids:
+                    unprocessed_societies.pop(used_id, None)
+                    hub_society_ids.discard(used_id)
             else:
-                # The seed could not form a valid cluster, mark it as Unclustered for now
-                # and remove it from processing pool to avoid infinite loops
-                unprocessed_societies.pop(seed_id, None) 
+                # If seed couldn't form ANY cluster, it becomes Unclustered
                 path, distance = get_delivery_sequence([seed], depot_coord)
                 clusters.append({
-                    'Cluster ID': f"Unclustered-{seed['Society ID']}", 'Type': 'Unclustered',
+                    'Cluster ID': f"Unclustered-{seed_id}", 'Type': 'Unclustered',
                     'Societies': [seed], 'Orders': seed['Orders'],
                     'Distance': distance, 'Path': path, 'Cost': 0
                 })
+                unprocessed_societies.pop(seed_id) # Remove from main pool
 
     return clusters
 
 def create_summary_df(clusters):
+    # (This function remains the same)
     summary_rows = []
     for c in clusters:
         total_orders = c['Orders']
@@ -192,6 +213,7 @@ def create_summary_df(clusters):
     return pd.DataFrame(summary_rows)
 
 def create_unified_map(clusters, depot_coord):
+    # (This function remains the same)
     m = folium.Map(location=depot_coord, zoom_start=12, tiles="CartoDB positron")
     folium.Marker(depot_coord, popup="Depot", icon=folium.Icon(color='black', icon='industry', prefix='fa')).add_to(m)
     
@@ -272,6 +294,7 @@ if st.button("🚀 Generate Clusters", type="primary"):
         st.session_state.clusters = run_clustering(df_raw, depot_lat, depot_long, costs)
 
 if st.session_state.clusters is not None:
+    # (The rest of the UI display code remains the same)
     clusters = st.session_state.clusters
     summary_df = create_summary_df(clusters)
     
