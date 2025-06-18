@@ -161,7 +161,9 @@ def add_summary(cid, members, ctype, vcost, ccost):
         'Total Orders': total_orders,
         'Total Distance (km)': tdist,
         'CPO (₹)': cpo,
-        'Delivery Sequence': path
+        'Delivery Sequence': path,
+        'Total Routes': 1,
+        'Total Clusters': 1
     }
 
 for cid, members in main_clusters:
@@ -178,7 +180,9 @@ for _, row in unclustered_df.iterrows():
         'Total Orders': row['Orders'],
         'Total Distance (km)': 0,
         'CPO (₹)': 0,
-        'Delivery Sequence': f"{row['Society Name']} -> {row['Society Name']} (0 km)"
+        'Delivery Sequence': f"{row['Society Name']} -> {row['Society Name']} (0 km)",
+        'Total Routes': 0,
+        'Total Clusters': 0
     })
 
 summary_df = pd.DataFrame(summary_rows)
@@ -190,17 +194,14 @@ st.download_button("Download Cluster Summary", summary_df.to_csv(index=False), f
 cumulative = summary_df.groupby('Cluster Type').agg({
     'No. of Societies': 'sum',
     'Total Orders': 'sum',
-    'Total Distance (km)': 'sum'
+    'Total Distance (km)': 'sum',
+    'Total Routes': 'sum',
+    'Total Clusters': 'sum'
 }).reset_index()
 cumulative['Average CPO (₹)'] = summary_df.groupby('Cluster Type')['CPO (₹)'].mean().values
 
 st.subheader("Cumulative Summary")
 st.dataframe(cumulative)
-
-# Additional Totals
-st.markdown("### Overall Stats")
-st.markdown(f"**Total Routes (Main + Micro):** {len(main_clusters) + len(micro_clusters)}")
-st.markdown(f"**Total Clusters:** {len(main_clusters)} Main + {len(micro_clusters)} Micro")
 
 if selected_main != "None":
     cid = int(selected_main.split('-')[1])
