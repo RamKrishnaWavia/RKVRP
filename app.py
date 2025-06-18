@@ -127,8 +127,37 @@ for cluster_id in df['Cluster ID'].unique():
             "Orders": row['Orders'],
             "Cluster Type": cluster_type,
             "Total Cost": round(cost * row['Orders'], 2),
-            "Delivery Path": delivery_path
+            "Delivery Path": delivery_path,
+            "Total Distance (km)": total_dist
         })
 
 summary_df = pd.DataFrame(summary_rows)
 st.download_button("Download Cluster Summary", summary_df.to_csv(index=False), file_name="cluster_summary.csv")
+
+# Display Main Cluster Map
+if main_cluster_id:
+    main_df = df[(df['Cluster ID'] == main_cluster_id) & (df['Cluster Type'] == 'main')]
+    if not main_df.empty:
+        main_map = folium.Map(location=[depot_lat, depot_long], zoom_start=14)
+        sequence, path_points, dists, total_dist, path_summary = get_delivery_sequence(main_df, depot_lat, depot_long)
+        for i, row in main_df.iterrows():
+            folium.Marker([row['Latitude'], row['Longitude']], tooltip=row['Society']).add_to(main_map)
+        if len(path_points) > 1:
+            folium.PolyLine(path_points, color="blue", weight=3).add_to(main_map)
+        st.subheader("Main Cluster Map")
+        st_folium(main_map, width=700, height=500)
+
+# Display Micro Cluster Map
+if micro_cluster_id:
+    micro_df = df[(df['Cluster ID'] == micro_cluster_id) & (df['Cluster Type'] == 'micro')]
+    if not micro_df.empty:
+        micro_map = folium.Map(location=[depot_lat, depot_long], zoom_start=14)
+        sequence, path_points, dists, total_dist, path_summary = get_delivery_sequence(micro_df, depot_lat, depot_long)
+        for i, row in micro_df.iterrows():
+            folium.Marker([row['Latitude'], row['Longitude']], tooltip=row['Society']).add_to(micro_map)
+        if len(path_points) > 1:
+            folium.PolyLine(path_points, color="green", weight=3).add_to(micro_map)
+        st.subheader("Micro Cluster Map")
+        st_folium(micro_map, width=700, height=500)
+
+st.dataframe(summary_df)
