@@ -132,28 +132,25 @@ if uploaded_file is not None:
                 cluster_id += 1
             hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
 
-    # Micro cluster logic (non-destructive, 2km + 120 orders + 10km route distance from depot)
+    # Micro cluster logic (safe loop)
     micro_cluster_id = 10000
     df['Micro_Cluster'] = -1
 
     for hub in df['Hub ID'].unique():
-        hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
-        while not hub_df.empty:
-            unassigned = hub_df.copy()
+        unassigned = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub) & (df['Micro_Cluster'] == -1)]
+        while not unassigned.empty:
             seed_idx = unassigned.index[0]
             seed = df.loc[seed_idx]
             seed_coord = (seed['Latitude'], seed['Longitude'])
             cluster_members = [seed_idx]
             cluster_orders = seed['Orders']
             current_points = [[source_lat, source_long], [seed['Latitude'], seed['Longitude']]]
-
             for idx in unassigned.index[1:]:
                 candidate = df.loc[idx]
                 candidate_coord = [candidate['Latitude'], candidate['Longitude']]
                 if (cluster_orders + candidate['Orders'] <= 120 and
                     is_within_seed_radius(seed_coord, candidate_coord) and
                     calculate_distance_km(source_lat, source_long, candidate_coord[0], candidate_coord[1]) <= 10):
-
                     test_points = current_points + [candidate_coord]
                     route_distance = calculate_route_distance(test_points)
                     if route_distance <= 10:
@@ -161,9 +158,13 @@ if uploaded_file is not None:
                         cluster_orders += candidate['Orders']
                         current_points.append(candidate_coord)
 
-            df.loc[cluster_members, 'Micro_Cluster'] = micro_cluster_id
-            micro_cluster_id += 1
-            hub_df = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub)]
+            if len(cluster_members) > 1:
+                df.loc[cluster_members, 'Micro_Cluster'] = micro_cluster_id
+                micro_cluster_id += 1
+            else:
+                break  # No valid cluster formed
+
+            unassigned = df[(df['Cluster'] == -1) & (df['Hub ID'] == hub) & (df['Micro_Cluster'] == -1)]
 
     st.dataframe(df)
 
