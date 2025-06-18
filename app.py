@@ -49,7 +49,6 @@ def get_delivery_sequence(cluster_df):
             total_distance += min_dist
             path.append(nearest)
             current = nearest
-    # Return back to depot
     total_distance += calculate_distance_km(points[path[-1]][0], points[path[-1]][1], depot_lat, depot_long)
     delivery_seq = []
     delivery_path = []
@@ -81,7 +80,7 @@ micro_cee_cost = st.sidebar.number_input("CEE Cost (₹) [Micro]", value=167)
 
 st.sidebar.markdown("### Download Input Template")
 template = pd.DataFrame({
-    'Society ID': [], 'Society Name': [], 'Latitude': [], 'Longitude': [], 'Orders': []
+    'Society ID': [], 'Society Name': [], 'Latitude': [], 'Longitude': [], 'Orders': [], 'Hub ID': []
 })
 st.sidebar.download_button("Download Template", template.to_csv(index=False), "input_template.csv")
 
@@ -99,50 +98,47 @@ micro_clusters = []
 unclustered = []
 used = set()
 
-# Main Clustering (Orders >= 180 + 2 km radius)
 cluster_id = 1
-for i, row in df.iterrows():
-    if row['Orders'] >= 180 and i not in used:
-        base = (row['Latitude'], row['Longitude'])
-        cluster_df = df.loc[df.index != i].copy()
-        cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
-        nearby = cluster_df[cluster_df['Distance'] <= 2.0]
-        members = df.loc[nearby.index.union([i])]
-        main_clusters.append((cluster_id, members))
-        used.update(members.index)
-        cluster_id += 1
+for hub_id in df['Hub ID'].unique():
+    hub_df = df[df['Hub ID'] == hub_id]
+    for i, row in hub_df.iterrows():
+        if row['Orders'] >= 180 and i not in used:
+            base = (row['Latitude'], row['Longitude'])
+            cluster_df = hub_df.loc[hub_df.index != i].copy()
+            cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
+            nearby = cluster_df[cluster_df['Distance'] <= 2.0]
+            members = hub_df.loc[nearby.index.union([i])]
+            main_clusters.append((cluster_id, members))
+            used.update(members.index)
+            cluster_id += 1
 
-# Micro Clustering (Remaining, proximity < 2km, total route dist < 20 km, orders < 120)
 micro_id = 1
 remaining = df.loc[~df.index.isin(used)]
 remaining = remaining[remaining['Orders'] < 120]
-while not remaining.empty:
-    seed = remaining.iloc[0]
-    base = (seed['Latitude'], seed['Longitude'])
-    cluster_df = remaining.copy()
-    cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
-    members = cluster_df[cluster_df['Distance'] <= 2.0]
-    seq, _, total_dist, _ = get_delivery_sequence(members)
-    if total_dist <= 20:
-        micro_clusters.append((micro_id, members))
-        used.update(members.index)
-        micro_id += 1
-    remaining = df.loc[~df.index.isin(used)]
-    remaining = remaining[remaining['Orders'] < 120]
+for hub_id in remaining['Hub ID'].unique():
+    hub_remaining = remaining[remaining['Hub ID'] == hub_id]
+    while not hub_remaining.empty:
+        seed = hub_remaining.iloc[0]
+        base = (seed['Latitude'], seed['Longitude'])
+        cluster_df = hub_remaining.copy()
+        cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
+        members = cluster_df[cluster_df['Distance'] <= 2.0]
+        seq, _, total_dist, _ = get_delivery_sequence(members)
+        if total_dist <= 20:
+            micro_clusters.append((micro_id, members))
+            used.update(members.index)
+            micro_id += 1
+        hub_remaining = hub_remaining.loc[~hub_remaining.index.isin(used)]
 
-# Unclustered
 unclustered_df = df.loc[~df.index.isin(used)]
 
-# Dropdowns
 main_ids = [f"Main-{cid}" for cid, _ in main_clusters]
 micro_ids = [f"Micro-{cid}" for cid, _ in micro_clusters]
 selected_main = st.selectbox("Select Main Cluster", ["None"] + main_ids)
 selected_micro = st.selectbox("Select Micro Cluster", ["None"] + micro_ids)
 
-# Show Map
 def show_cluster_on_map(cluster_df, title):
     m = folium.Map(location=[depot_lat, depot_long], zoom_start=13)
-    # Depot marker
     folium.Marker([depot_lat, depot_long], tooltip="Depot", icon=folium.Icon(color='blue', icon='home')).add_to(m)
     seq, path, _, _ = get_delivery_sequence(cluster_df)
     for _, row in cluster_df.iterrows():
@@ -159,11 +155,10 @@ if selected_main != "None":
 
 if selected_micro != "None":
     cid = int(selected_micro.split('-')[1])
-    members = next(c[1] for c[1] in micro_clusters if c[0] == cid)
+    members = next(c[1] for c in micro_clusters if c[0] == cid)
     st.subheader(f"Map for Micro Cluster {cid}")
     show_cluster_on_map(members, f"Micro Cluster {cid}")
 
-# Summary Table
 summary_rows = []
 def add_summary(cid, members, ctype, vcost, ccost):
     total_orders = members['Orders'].sum()
