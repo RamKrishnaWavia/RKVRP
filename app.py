@@ -84,6 +84,9 @@ st.sidebar.header("Depot Settings")
 depot_lat = st.sidebar.number_input("Depot Latitude", value=12.9716, format="%.6f")
 depot_long = st.sidebar.number_input("Depot Longitude", value=77.5946, format="%.6f")
 
+st.sidebar.header("Main Cluster Cost Settings")
+main_vehicle_cost = st.sidebar.number_input("Van Monthly Cost (₹)", value=35000)
+
 st.sidebar.header("Micro Cluster Cost Settings")
 micro_van_cost = st.sidebar.number_input("Van Cost (₹) [Micro]", value=500)
 micro_cee_cost = st.sidebar.number_input("CEE Cost (₹) [Micro]", value=167)
@@ -95,16 +98,11 @@ micro_cluster_id = st.sidebar.text_input("Select Micro Cluster ID")
 st.header("Cluster Map Display")
 st.text("Map and cluster outputs will appear here based on selected Cluster ID")
 
-# Example Data (replace with actual logic in production)
-data = {
-    "Cluster ID": ["M1", "M1", "MIC1", "MIC1", "UN1"],
-    "Society": ["Soc A", "Soc B", "Soc C", "Soc D", "Soc E"],
-    "Latitude": [12.9716, 12.9725, 12.9735, 12.9740, 12.9750],
-    "Longitude": [77.5946, 77.5955, 77.5965, 77.5970, 77.5980],
-    "Orders": [60, 70, 40, 60, 50],
-    "Cluster Type": ["main", "main", "micro", "micro", "unclustered"]
-}
-df = pd.DataFrame(data)
+uploaded_file = st.file_uploader("Upload Society Data CSV", type=["csv"])
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+else:
+    st.stop()
 
 summary_rows = []
 for cluster_id in df['Cluster ID'].unique():
@@ -112,7 +110,7 @@ for cluster_id in df['Cluster ID'].unique():
     cluster_type = cluster_data['Cluster Type'].iloc[0]
     cost = 0
     if cluster_type == "main":
-        cost = 35000 / max(sum(cluster_data['Orders']), 1)
+        cost = main_vehicle_cost / max(sum(cluster_data['Orders']), 1)
     elif cluster_type == "micro":
         cost = (micro_van_cost + micro_cee_cost) / max(sum(cluster_data['Orders']), 1)
 
@@ -132,7 +130,13 @@ for cluster_id in df['Cluster ID'].unique():
         })
 
 summary_df = pd.DataFrame(summary_rows)
-st.download_button("Download Cluster Summary", summary_df.to_csv(index=False), file_name="cluster_summary.csv")
+
+main_summary_df = summary_df[summary_df['Cluster Type'] == 'main']
+micro_summary_df = summary_df[summary_df['Cluster Type'] == 'micro']
+
+st.subheader("Download Summary Files")
+st.download_button("Download Main Cluster Summary", main_summary_df.to_csv(index=False), file_name="main_cluster_summary.csv")
+st.download_button("Download Micro Cluster Summary", micro_summary_df.to_csv(index=False), file_name="micro_cluster_summary.csv")
 
 # Display Main Cluster Map
 if main_cluster_id:
@@ -160,4 +164,5 @@ if micro_cluster_id:
         st.subheader("Micro Cluster Map")
         st_folium(micro_map, width=700, height=500)
 
+st.subheader("Cluster Summary View")
 st.dataframe(summary_df)
