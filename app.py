@@ -106,6 +106,8 @@ else:
 
 summary_rows = []
 cluster_metrics = []
+all_clusters_summary = []
+
 for cluster_id in df['Cluster ID'].unique():
     cluster_data = df[df['Cluster ID'] == cluster_id]
     cluster_type = cluster_data['Cluster Type'].iloc[0]
@@ -120,6 +122,16 @@ for cluster_id in df['Cluster ID'].unique():
     sequence, route_points, dists, total_dist, delivery_path = get_delivery_sequence(cluster_data, depot_lat, depot_long)
 
     cluster_metrics.append({
+        "Cluster ID": cluster_id,
+        "Cluster Type": cluster_type,
+        "No of Societies": num_societies,
+        "Total Orders": total_orders,
+        "Total Distance (km)": total_dist,
+        "CPO (₹)": round(cost, 2),
+        "Delivery Sequence": delivery_path
+    })
+
+    all_clusters_summary.append({
         "Cluster ID": cluster_id,
         "Cluster Type": cluster_type,
         "No of Societies": num_societies,
@@ -144,6 +156,7 @@ for cluster_id in df['Cluster ID'].unique():
 
 summary_df = pd.DataFrame(summary_rows)
 metrics_df = pd.DataFrame(cluster_metrics)
+all_clusters_df = pd.DataFrame(all_clusters_summary)
 
 main_summary_df = summary_df[summary_df['Cluster Type'] == 'main']
 micro_summary_df = summary_df[summary_df['Cluster Type'] == 'micro']
@@ -152,6 +165,7 @@ st.subheader("Download Summary Files")
 st.download_button("Download Main Cluster Summary", main_summary_df.to_csv(index=False), file_name="main_cluster_summary.csv")
 st.download_button("Download Micro Cluster Summary", micro_summary_df.to_csv(index=False), file_name="micro_cluster_summary.csv")
 st.download_button("Download Cluster Metrics Summary", metrics_df.to_csv(index=False), file_name="cluster_metrics_summary.csv")
+st.download_button("Download All Cluster Summary (with metrics)", all_clusters_df.to_csv(index=False), file_name="all_clusters_summary.csv")
 
 # Display Main Cluster Map
 if main_cluster_id:
@@ -184,3 +198,6 @@ st.dataframe(summary_df)
 
 st.subheader("Cluster Metrics Summary View")
 st.dataframe(metrics_df)
+
+st.subheader("All Cluster Summary View")
+st.dataframe(all_clusters_df)
