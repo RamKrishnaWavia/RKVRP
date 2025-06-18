@@ -80,6 +80,10 @@ st.sidebar.header("Micro Cluster Cost Settings")
 micro_van_cost = st.sidebar.number_input("Van Cost (₹) [Micro]", value=500)
 micro_cee_cost = st.sidebar.number_input("CEE Cost (₹) [Micro]", value=167)
 
+st.sidebar.header("Mini Cluster Cost Settings")
+mini_van_cost = st.sidebar.number_input("Van Cost (₹) [Mini]", value=700)
+mini_cee_cost = st.sidebar.number_input("CEE Cost (₹) [Mini]", value=200)
+
 st.sidebar.markdown("### Download Input Template")
 template = pd.DataFrame({
     'Society ID': [], 'Society Name': [], 'Latitude': [], 'Longitude': [], 'Orders': [], 'Hub ID': []
@@ -97,6 +101,7 @@ st.dataframe(df)
 
 main_clusters = []
 micro_clusters = []
+mini_clusters = []
 unclustered = []
 used = set()
 
@@ -132,12 +137,33 @@ for hub_id in remaining['Hub ID'].unique():
             micro_id += 1
         hub_remaining = hub_remaining.loc[~hub_remaining.index.isin(used)]
 
+# Mini Cluster
+mini_id = 1
+midrange = df.loc[~df.index.isin(used)]
+midrange = midrange[(midrange['Orders'] >= 121) & (midrange['Orders'] <= 179)]
+for hub_id in midrange['Hub ID'].unique():
+    hub_midrange = midrange[midrange['Hub ID'] == hub_id]
+    while not hub_midrange.empty:
+        seed = hub_midrange.iloc[0]
+        base = (seed['Latitude'], seed['Longitude'])
+        cluster_df = hub_midrange.copy()
+        cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
+        members = cluster_df[cluster_df['Distance'] <= 2.0]
+        seq, _, total_dist, _ = get_delivery_sequence(members)
+        if total_dist <= 15:
+            mini_clusters.append((mini_id, members))
+            used.update(members.index)
+            mini_id += 1
+        hub_midrange = hub_midrange.loc[~hub_midrange.index.isin(used)]
+
 unclustered_df = df.loc[~df.index.isin(used)]
 
 main_ids = [f"Main-{cid}" for cid, _ in main_clusters]
 micro_ids = [f"Micro-{cid}" for cid, _ in micro_clusters]
+mini_ids = [f"Mini-{cid}" for cid, _ in mini_clusters]
 selected_main = st.selectbox("Select Main Cluster", ["None"] + main_ids)
 selected_micro = st.selectbox("Select Micro Cluster", ["None"] + micro_ids)
+selected_mini = st.selectbox("Select Mini Cluster", ["None"] + mini_ids)
 
 def show_cluster_on_map(cluster_df, title):
     m = folium.Map(location=[depot_lat, depot_long], zoom_start=13)
@@ -171,6 +197,9 @@ for cid, members in main_clusters:
 
 for cid, members in micro_clusters:
     summary_rows.append(add_summary(cid, members, "Micro", micro_van_cost, micro_cee_cost))
+
+for cid, members in mini_clusters:
+    summary_rows.append(add_summary(cid, members, "Mini", mini_van_cost, mini_cee_cost))
 
 for _, row in unclustered_df.iterrows():
     summary_rows.append({
@@ -218,3 +247,11 @@ if selected_micro != "None":
     st.dataframe(pd.DataFrame([add_summary(cid, members, "Micro", micro_van_cost, micro_cee_cost)]))
     st.subheader(f"Map for Micro Cluster {cid}")
     show_cluster_on_map(members, f"Micro Cluster {cid}")
+
+if selected_mini != "None":
+    cid = int(selected_mini.split('-')[1])
+    members = next(c[1] for c in mini_clusters if c[0] == cid)
+    st.subheader(f"Mini Cluster {cid} Summary")
+    st.dataframe(pd.DataFrame([add_summary(cid, members, "Mini", mini_van_cost, mini_cee_cost)]))
+    st.subheader(f"Map for Mini Cluster {cid}")
+    show_cluster_on_map(members, f"Mini Cluster {cid}")
