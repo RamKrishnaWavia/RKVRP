@@ -197,6 +197,11 @@ cumulative['Average CPO (₹)'] = summary_df.groupby('Cluster Type')['CPO (₹)'
 st.subheader("Cumulative Summary")
 st.dataframe(cumulative)
 
+# Additional Totals
+st.markdown("### Overall Stats")
+st.markdown(f"**Total Routes (Main + Micro):** {len(main_clusters) + len(micro_clusters)}")
+st.markdown(f"**Total Clusters:** {len(main_clusters)} Main + {len(micro_clusters)} Micro")
+
 if selected_main != "None":
     cid = int(selected_main.split('-')[1])
     members = next(c[1] for c in main_clusters if c[0] == cid)
