@@ -57,7 +57,9 @@ def get_delivery_sequence(cluster_df):
         b = path[i+1]
         dist = calculate_distance_km(points[a][0], points[a][1], points[b][0], points[b][1])
         delivery_seq.append(f"{names[a]} -> {names[b]} ({dist} km)")
-        delivery_path.append((points[a], points[b]))
+        delivery_path.append((points[a], points[b], dist))
+    if len(path) == 1:
+        delivery_seq.append(f"{names[path[0]]} -> {names[path[0]]} (0 km)")
     return delivery_seq, delivery_path, total_distance, " | ".join(delivery_seq)
 
 def calculate_cpo(total_orders, van_cost, cee_cost=0):
@@ -140,24 +142,12 @@ selected_micro = st.selectbox("Select Micro Cluster", ["None"] + micro_ids)
 def show_cluster_on_map(cluster_df, title):
     m = folium.Map(location=[depot_lat, depot_long], zoom_start=13)
     folium.Marker([depot_lat, depot_long], tooltip="Depot", icon=folium.Icon(color='blue', icon='home')).add_to(m)
-    seq, path, _, _ = get_delivery_sequence(cluster_df)
+    seq, path, total_dist, _ = get_delivery_sequence(cluster_df)
     for _, row in cluster_df.iterrows():
-        folium.Marker([row['Latitude'], row['Longitude']], tooltip=row['Society Name']).add_to(m)
-    for start, end in path:
-        PolyLine([start, end], color="green", weight=2.5, opacity=1).add_to(m)
+        folium.Marker([row['Latitude'], row['Longitude']], tooltip=f"{row['Society Name']} (Orders: {row['Orders']})").add_to(m)
+    for start, end, dist in path:
+        PolyLine([start, end], color="green", weight=2.5, opacity=1, tooltip=f"{dist} km").add_to(m)
     return st_folium(m, width=700, height=500)
-
-if selected_main != "None":
-    cid = int(selected_main.split('-')[1])
-    members = next(c[1] for c in main_clusters if c[0] == cid)
-    st.subheader(f"Map for Main Cluster {cid}")
-    show_cluster_on_map(members, f"Main Cluster {cid}")
-
-if selected_micro != "None":
-    cid = int(selected_micro.split('-')[1])
-    members = next(c[1] for c in micro_clusters if c[0] == cid)
-    st.subheader(f"Map for Micro Cluster {cid}")
-    show_cluster_on_map(members, f"Micro Cluster {cid}")
 
 summary_rows = []
 def add_summary(cid, members, ctype, vcost, ccost):
@@ -188,10 +178,37 @@ for _, row in unclustered_df.iterrows():
         'Total Orders': row['Orders'],
         'Total Distance (km)': 0,
         'CPO (₹)': 0,
-        'Delivery Sequence': row['Society Name']
+        'Delivery Sequence': f"{row['Society Name']} -> {row['Society Name']} (0 km)"
     })
 
 summary_df = pd.DataFrame(summary_rows)
 st.subheader("Cluster Summary")
 st.dataframe(summary_df)
 st.download_button("Download Cluster Summary", summary_df.to_csv(index=False), file_name="cluster_summary.csv")
+
+# Cumulative Summary
+cumulative = summary_df.groupby('Cluster Type').agg({
+    'No. of Societies': 'sum',
+    'Total Orders': 'sum',
+    'Total Distance (km)': 'sum'
+}).reset_index()
+cumulative['Average CPO (₹)'] = summary_df.groupby('Cluster Type')['CPO (₹)'].mean().values
+
+st.subheader("Cumulative Summary")
+st.dataframe(cumulative)
+
+if selected_main != "None":
+    cid = int(selected_main.split('-')[1])
+    members = next(c[1] for c in main_clusters if c[0] == cid)
+    st.subheader(f"Main Cluster {cid} Summary")
+    st.dataframe(pd.DataFrame([add_summary(cid, members, "Main", main_van_cost, main_cee_cost)]))
+    st.subheader(f"Map for Main Cluster {cid}")
+    show_cluster_on_map(members, f"Main Cluster {cid}")
+
+if selected_micro != "None":
+    cid = int(selected_micro.split('-')[1])
+    members = next(c[1] for c in micro_clusters if c[0] == cid)
+    st.subheader(f"Micro Cluster {cid} Summary")
+    st.dataframe(pd.DataFrame([add_summary(cid, members, "Micro", micro_van_cost, micro_cee_cost)]))
+    st.subheader(f"Map for Micro Cluster {cid}")
+    show_cluster_on_map(members, f"Micro Cluster {cid}")
