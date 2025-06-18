@@ -234,12 +234,12 @@ def create_unified_map(clusters, depot_coord):
 
 
 # --- STREAMLIT UI ---
-st.title("🚚 Logistics Cluster Optimizer")
+st.title("🚚 RK - Cluster Optimizer and Delivery Sequencing")
 
 with st.sidebar:
     st.header("1. Depot Settings")
-    depot_lat = st.number_input("Depot Latitude", value=12.9716, format="%.6f")
-    depot_long = st.number_input("Depot Longitude", value=77.5946, format="%.6f")
+    depot_lat = st.number_input("Depot Latitude", value=12.989709 , format="%.6f")
+    depot_long = st.number_input("Depot Longitude", value=77.786253, format="%.6f")
 
     st.header("2. Cluster Costs")
     main_van_cost = st.number_input("Main Cluster Van Cost (₹)", value=833)
