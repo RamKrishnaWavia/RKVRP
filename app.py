@@ -154,21 +154,45 @@ def run_clustering(df, depot_lat, depot_lon, costs):
 
     return all_clusters
 
-def create_summary_df(clusters):
+def create_summary_df(clusters, depot_coord):
     """
-    Creates the summary DataFrame with society names in the delivery sequence.
+    Creates the summary DataFrame with a detailed, human-readable delivery sequence.
     """
     summary_rows = []
     for c in clusters:
         total_orders = c['Orders']
         cpo = (c['Cost'] / total_orders) if total_orders > 0 else 0
         
-        # Create a mapping from Society ID to Society Name for this cluster
         id_to_name = {s['Society ID']: s['Society Name'] for s in c['Societies']}
+        id_to_coord = {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
         
-        # Build the delivery sequence string using names
-        delivery_sequence_str = ' -> '.join([id_to_name[sid] for sid in c['Path']])
-        
+        if not c['Path']:
+            delivery_sequence_str = id_to_name.get(c['Societies'][0]['Society ID'], "N/A")
+        else:
+            # Build the full journey with names and coordinates
+            journey_names = ['Depot'] + [id_to_name.get(sid, str(sid)) for sid in c['Path']]
+            journey_coords = [depot_coord] + [id_to_coord.get(sid) for sid in c['Path']]
+            
+            sequence_parts = []
+            # Loop through each leg of the journey
+            for i in range(len(journey_coords) - 1):
+                start_name = journey_names[i]
+                end_name = journey_names[i+1]
+                start_coord = journey_coords[i]
+                end_coord = journey_coords[i+1]
+                
+                dist = haversine(start_coord, end_coord)
+                
+                sequence_parts.append(f"{start_name} -> {end_name} ({dist:.2f} km)")
+            
+            # Add the final leg back to the depot
+            last_society_name = journey_names[-1]
+            last_society_coord = journey_coords[-1]
+            dist_to_depot = haversine(last_society_coord, depot_coord)
+            sequence_parts.append(f"{last_society_name} -> Depot ({dist_to_depot:.2f} km)")
+            
+            delivery_sequence_str = ' | '.join(sequence_parts)
+
         summary_rows.append({
             'Cluster ID': c['Cluster ID'],
             'Cluster Type': c['Type'],
@@ -176,7 +200,7 @@ def create_summary_df(clusters):
             'Total Orders': total_orders,
             'Total Distance (km)': c['Distance'],
             'CPO (₹)': round(cpo, 2),
-            'Delivery Sequence': delivery_sequence_str, # CHANGED
+            'Delivery Sequence': delivery_sequence_str,
         })
     return pd.DataFrame(summary_rows)
 
@@ -193,33 +217,31 @@ def create_unified_map(clusters, depot_coord):
         color = colors.get(c['Type'], 'gray')
         fg = folium.FeatureGroup(name=f"{c['Cluster ID']} ({c['Type']})")
         
-        # Create helper maps for this cluster
         id_to_name = {s['Society ID']: s['Society Name'] for s in c['Societies']}
         id_to_coord = {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
 
-        # Build a full path list with names and coordinates for descriptive tooltips
         full_path_info = [("Depot", depot_coord)]
-        for sid in c['Path']:
-            full_path_info.append((id_to_name[sid], id_to_coord[sid]))
-        full_path_info.append(("Depot", depot_coord)) # Add return to depot
+        if c['Path']:
+            for sid in c['Path']:
+                full_path_info.append((id_to_name.get(sid, str(sid)), id_to_coord.get(sid)))
+        full_path_info.append(("Depot", depot_coord))
 
-        # --- NEW: Draw individual line segments with distance tooltips ---
         for i in range(len(full_path_info) - 1):
             start_name, start_coord = full_path_info[i]
             end_name, end_coord = full_path_info[i+1]
             
-            dist = haversine(start_coord, end_coord)
-            tooltip_text = f"{start_name} to {end_name}: {dist:.2f} km"
-            
-            folium.PolyLine(
-                locations=[start_coord, end_coord],
-                color=color,
-                weight=2.5,
-                opacity=0.8,
-                tooltip=tooltip_text
-            ).add_to(fg)
+            if start_coord and end_coord:
+                dist = haversine(start_coord, end_coord)
+                tooltip_text = f"{start_name} to {end_name}: {dist:.2f} km"
+                
+                folium.PolyLine(
+                    locations=[start_coord, end_coord],
+                    color=color,
+                    weight=2.5,
+                    opacity=0.8,
+                    tooltip=tooltip_text
+                ).add_to(fg)
         
-        # Add markers for each society (unchanged)
         for society in c['Societies']:
             folium.Marker(
                 location=[society['Latitude'], society['Longitude']],
@@ -234,12 +256,12 @@ def create_unified_map(clusters, depot_coord):
 
 
 # --- STREAMLIT UI ---
-st.title("🚚 RK - Cluster Optimizer and Delivery Sequencing")
+st.title("🚚 Logistics Cluster Optimizer")
 
 with st.sidebar:
     st.header("1. Depot Settings")
-    depot_lat = st.number_input("Depot Latitude", value=12.989709 , format="%.6f")
-    depot_long = st.number_input("Depot Longitude", value=77.786253, format="%.6f")
+    depot_lat = st.number_input("Depot Latitude", value=12.9716, format="%.6f")
+    depot_long = st.number_input("Depot Longitude", value=77.5946, format="%.6f")
 
     st.header("2. Cluster Costs")
     main_van_cost = st.number_input("Main Cluster Van Cost (₹)", value=833)
@@ -280,34 +302,32 @@ if 'clusters' not in st.session_state:
 
 if st.button("🚀 Generate Clusters", type="primary"):
     with st.spinner("Analyzing data and forming clusters..."):
+        depot_coord = (depot_lat, depot_long)
         st.session_state.clusters = run_clustering(df_raw, depot_lat, depot_long, costs)
+        st.session_state.depot_coord = depot_coord
 
-if st.session_state.clusters is not None:
+
+if st.session_state.get('clusters') is not None:
     clusters = st.session_state.clusters
-    summary_df = create_summary_df(clusters)
+    depot_coord = st.session_state.depot_coord
+    
+    # Pass depot_coord to the summary function
+    summary_df = create_summary_df(clusters, depot_coord) 
     
     st.header("📊 Cluster Summary")
     st.dataframe(summary_df.sort_values(by=['Cluster Type', 'Cluster ID']))
     
     csv_buffer = BytesIO()
     summary_df.to_csv(csv_buffer, index=False, encoding='utf-8')
-    st.download_button(
-        "Download Full Summary (CSV)",
-        data=csv_buffer.getvalue(),
-        file_name="cluster_summary.csv",
-        mime="text/csv"
-    )
+    st.download_button("Download Full Summary (CSV)", data=csv_buffer.getvalue(), file_name="cluster_summary.csv", mime="text/csv")
 
     st.header("🗺️ Unified Map View")
     st.info("You can toggle clusters on/off using the layer control icon in the top-right of the map.")
-    unified_map = create_unified_map(clusters, (depot_lat, depot_long))
+    unified_map = create_unified_map(clusters, depot_coord)
     st_folium(unified_map, width=1200, height=600, returned_objects=[])
 
     st.header("🔍 Individual Cluster Details")
-    cluster_id_to_show = st.selectbox(
-        "Select a Cluster to Inspect",
-        options=sorted(summary_df['Cluster ID'].tolist())
-    )
+    cluster_id_to_show = st.selectbox("Select a Cluster to Inspect", options=sorted(summary_df['Cluster ID'].tolist()))
     
     selected_cluster = next((c for c in clusters if c['Cluster ID'] == cluster_id_to_show), None)
 
@@ -320,13 +340,8 @@ if st.session_state.clusters is not None:
             
             detail_csv_buffer = BytesIO()
             cluster_details_df.to_csv(detail_csv_buffer, index=False, encoding='utf-8')
-            st.download_button(
-                f"Download Details for {selected_cluster['Cluster ID']}",
-                data=detail_csv_buffer.getvalue(),
-                file_name=f"cluster_{selected_cluster['Cluster ID']}_details.csv",
-                mime="text/csv"
-            )
+            st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", data=detail_csv_buffer.getvalue(), file_name=f"cluster_{selected_cluster['Cluster ID']}_details.csv", mime="text/csv")
         with col2:
             st.subheader("Route Map")
-            cluster_map = create_unified_map([selected_cluster], (depot_lat, depot_long))
+            cluster_map = create_unified_map([selected_cluster], depot_coord)
             st_folium(cluster_map, width=600, height=400, returned_objects=[])
