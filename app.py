@@ -108,53 +108,55 @@ used = set()
 cluster_id = 1
 for hub_id in df['Hub ID'].unique():
     hub_df = df[df['Hub ID'] == hub_id]
-    for i, row in hub_df.iterrows():
-        if row['Orders'] >= 180 and i not in used:
-            base = (row['Latitude'], row['Longitude'])
-            cluster_df = hub_df.loc[hub_df.index != i].copy()
-            cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
-            nearby = cluster_df[cluster_df['Distance'] <= 2.0]
-            members = hub_df.loc[nearby.index.union([i])]
+    while not hub_df.empty:
+        seed = hub_df.iloc[0]
+        base = (seed['Latitude'], seed['Longitude'])
+        cluster_df = hub_df.copy()
+        cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
+        members = cluster_df[cluster_df['Distance'] <= 2.0]
+        seq, _, total_dist, _ = get_delivery_sequence(members)
+        total_orders = members['Orders'].sum()
+        if 180 <= total_orders <= 220:
             main_clusters.append((cluster_id, members))
             used.update(members.index)
             cluster_id += 1
+        hub_df = hub_df.loc[~hub_df.index.isin(used)]
 
-micro_id = 1
-remaining = df.loc[~df.index.isin(used)]
-remaining = remaining[remaining['Orders'] < 120]
-for hub_id in remaining['Hub ID'].unique():
-    hub_remaining = remaining[remaining['Hub ID'] == hub_id]
-    while not hub_remaining.empty:
-        seed = hub_remaining.iloc[0]
-        base = (seed['Latitude'], seed['Longitude'])
-        cluster_df = hub_remaining.copy()
-        cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
-        members = cluster_df[cluster_df['Distance'] <= 2.0]
-        seq, _, total_dist, _ = get_delivery_sequence(members)
-        if total_dist <= 20:
-            micro_clusters.append((micro_id, members))
-            used.update(members.index)
-            micro_id += 1
-        hub_remaining = hub_remaining.loc[~hub_remaining.index.isin(used)]
-
-# Mini Cluster
 mini_id = 1
 midrange = df.loc[~df.index.isin(used)]
-midrange = midrange[(midrange['Orders'] >= 121) & (midrange['Orders'] <= 179)]
 for hub_id in midrange['Hub ID'].unique():
-    hub_midrange = midrange[midrange['Hub ID'] == hub_id]
-    while not hub_midrange.empty:
-        seed = hub_midrange.iloc[0]
+    hub_df = midrange[midrange['Hub ID'] == hub_id]
+    while not hub_df.empty:
+        seed = hub_df.iloc[0]
         base = (seed['Latitude'], seed['Longitude'])
-        cluster_df = hub_midrange.copy()
+        cluster_df = hub_df.copy()
         cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
         members = cluster_df[cluster_df['Distance'] <= 2.0]
         seq, _, total_dist, _ = get_delivery_sequence(members)
-        if total_dist <= 15:
+        total_orders = members['Orders'].sum()
+        if 121 <= total_orders <= 179 and total_dist <= 15:
             mini_clusters.append((mini_id, members))
             used.update(members.index)
             mini_id += 1
-        hub_midrange = hub_midrange.loc[~hub_midrange.index.isin(used)]
+        hub_df = hub_df.loc[~hub_df.index.isin(used)]
+
+micro_id = 1
+remaining = df.loc[~df.index.isin(used)]
+for hub_id in remaining['Hub ID'].unique():
+    hub_df = remaining[remaining['Hub ID'] == hub_id]
+    while not hub_df.empty:
+        seed = hub_df.iloc[0]
+        base = (seed['Latitude'], seed['Longitude'])
+        cluster_df = hub_df.copy()
+        cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
+        members = cluster_df[cluster_df['Distance'] <= 2.0]
+        seq, _, total_dist, _ = get_delivery_sequence(members)
+        total_orders = members['Orders'].sum()
+        if total_orders <= 120 and total_dist <= 20:
+            micro_clusters.append((micro_id, members))
+            used.update(members.index)
+            micro_id += 1
+        hub_df = hub_df.loc[~hub_df.index.isin(used)]
 
 unclustered_df = df.loc[~df.index.isin(used)]
 
