@@ -49,6 +49,8 @@ def get_delivery_sequence(cluster_df):
             total_distance += min_dist
             path.append(nearest)
             current = nearest
+    # Return back to depot
+    total_distance += calculate_distance_km(points[path[-1]][0], points[path[-1]][1], depot_lat, depot_long)
     delivery_seq = []
     delivery_path = []
     for i in range(len(path) - 1):
@@ -110,7 +112,7 @@ for i, row in df.iterrows():
         used.update(members.index)
         cluster_id += 1
 
-# Micro Clustering (Remaining, proximity < 2km, total dist < 10 km, orders < 120)
+# Micro Clustering (Remaining, proximity < 2km, total route dist < 20 km, orders < 120)
 micro_id = 1
 remaining = df.loc[~df.index.isin(used)]
 remaining = remaining[remaining['Orders'] < 120]
@@ -121,7 +123,7 @@ while not remaining.empty:
     cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
     members = cluster_df[cluster_df['Distance'] <= 2.0]
     seq, _, total_dist, _ = get_delivery_sequence(members)
-    if total_dist <= 10:
+    if total_dist <= 20:
         micro_clusters.append((micro_id, members))
         used.update(members.index)
         micro_id += 1
@@ -140,8 +142,13 @@ selected_micro = st.selectbox("Select Micro Cluster", ["None"] + micro_ids)
 # Show Map
 def show_cluster_on_map(cluster_df, title):
     m = folium.Map(location=[depot_lat, depot_long], zoom_start=13)
+    # Depot marker
+    folium.Marker([depot_lat, depot_long], tooltip="Depot", icon=folium.Icon(color='blue', icon='home')).add_to(m)
+    seq, path, _, _ = get_delivery_sequence(cluster_df)
     for _, row in cluster_df.iterrows():
         folium.Marker([row['Latitude'], row['Longitude']], tooltip=row['Society Name']).add_to(m)
+    for start, end in path:
+        PolyLine([start, end], color="green", weight=2.5, opacity=1).add_to(m)
     return st_folium(m, width=700, height=500)
 
 if selected_main != "None":
@@ -152,7 +159,7 @@ if selected_main != "None":
 
 if selected_micro != "None":
     cid = int(selected_micro.split('-')[1])
-    members = next(c[1] for c in micro_clusters if c[0] == cid)
+    members = next(c[1] for c[1] in micro_clusters if c[0] == cid)
     st.subheader(f"Map for Micro Cluster {cid}")
     show_cluster_on_map(members, f"Micro Cluster {cid}")
 
