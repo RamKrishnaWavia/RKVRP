@@ -1,408 +1,315 @@
-import os
+import streamlit as st
 import pandas as pd
-import numpy as np
 import folium
-import io
-
-from flask import (Flask, render_template, request, redirect,
-                   url_for, flash, send_file, session)
-from werkzeug.utils import secure_filename
+from folium.plugins import MarkerCluster
+from streamlit_folium import st_folium
 from haversine import haversine, Unit
+from io import BytesIO
 
-# --- Configuration ---
-UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'csv', 'xlsx'}
-REQUIRED_COLUMNS = ['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID']
+st.set_page_config(layout="wide")
 
-app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['SECRET_KEY'] = 'a_very_secret_key_for_sessions'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB max upload size
-
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-
-# --- Helper Functions ---
-
-def allowed_file(filename):
-    """Check if the uploaded file has an allowed extension."""
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+# --- UTILITY & ALGORITHM FUNCTIONS ---
 
 def validate_columns(df):
     """Validate if the dataframe contains all required columns."""
-    missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
+    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID'}
+    missing_cols = required_cols - set(df.columns)
     if missing_cols:
         return f"File is missing required columns: {', '.join(missing_cols)}"
+    # Data type validation
+    for col in ['Latitude', 'Longitude', 'Orders', 'Hub ID']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    if df.isnull().values.any():
+        return "File contains non-numeric or empty values in required numeric columns. Please check."
     return None
 
-def solve_tsp_nearest_neighbor(points, depot_coord):
+def get_delivery_sequence(points, depot_coord):
     """
-    Solves the TSP for a set of points using the Nearest Neighbor heuristic.
-    Returns the ordered list of points (IDs) and total distance.
+    Calculates the delivery sequence and total distance for a cluster using Nearest Neighbor heuristic.
+    The route starts at the depot, visits all points, and returns to the depot.
+    
+    Args:
+        points (list of dicts): Each dict must have 'Society ID', 'Latitude', 'Longitude'.
+        depot_coord (tuple): (latitude, longitude) of the depot.
+    
+    Returns:
+        tuple: (list of society IDs in order, total distance in km)
     """
     if not points:
         return [], 0.0
 
-    point_coords = {p['id']: (p['lat'], p['lon']) for p in points}
+    point_coords = {p['Society ID']: (p['Latitude'], p['Longitude']) for p in points}
     
-    # Start at the depot
-    current_point_id = 'Depot'
     current_coord = depot_coord
-    
     unvisited_ids = set(point_coords.keys())
-    path = ['Depot']
+    path = []
     total_distance = 0.0
 
     while unvisited_ids:
-        nearest_neighbor_id = min(unvisited_ids, key=lambda pid: haversine(current_coord, point_coords[pid]))
+        nearest_id = min(unvisited_ids, key=lambda pid: haversine(current_coord, point_coords[pid]))
         
-        distance_to_nearest = haversine(current_coord, point_coords[nearest_neighbor_id], unit=Unit.KILOMETERS)
+        distance_to_nearest = haversine(current_coord, point_coords[nearest_id])
         total_distance += distance_to_nearest
         
-        current_point_id = nearest_neighbor_id
-        current_coord = point_coords[current_point_id]
+        current_coord = point_coords[nearest_id]
+        path.append(nearest_id)
+        unvisited_ids.remove(nearest_id)
+    
+    # Add distance from the last point back to the depot
+    total_distance += haversine(current_coord, depot_coord)
         
-        path.append(current_point_id)
-        unvisited_ids.remove(current_point_id)
-        
-    return path, total_distance
+    return path, round(total_distance, 2)
 
-# --- Main Clustering Logic ---
 
-def perform_clustering(df, depot_coord, costs):
+@st.cache_data
+def run_clustering(df, depot_lat, depot_lon, costs):
     """
-    The core logic to create clusters based on predefined rules.
+    A more robust, rule-based greedy clustering algorithm.
     """
     clusters = []
-    unclustered_societies = []
     cluster_id_counter = 1
+    unclustered_societies = []
+    
+    # Create a copy to avoid modifying the original cached DataFrame
+    remaining_df = df.copy()
+    depot_coord = (depot_lat, depot_lon)
 
-    # Group data by Hub ID, as clusters cannot span across hubs
-    for hub_id, hub_group in df.groupby('Hub ID'):
-        # Sort societies by order count to greedily form larger clusters first
-        remaining_societies = hub_group.sort_values('Orders', ascending=False).to_dict('records')
+    # --- MAIN CLUSTERS (>= 180 orders) ---
+    # Prioritize single large societies that qualify on their own
+    main_candidates = remaining_df[remaining_df['Orders'] >= 180].copy()
+    for _, society in main_candidates.iterrows():
+        society_dict = [society.to_dict()]
+        path, distance = get_delivery_sequence(society_dict, depot_coord)
+        clusters.append({
+            'Cluster ID': f"Main-{cluster_id_counter}",
+            'Type': 'Main', 'Societies': society_dict, 'Orders': society['Orders'], 
+            'Distance': distance, 'Path': path, 'Cost': costs['main']
+        })
+        cluster_id_counter += 1
+    remaining_df = remaining_df.drop(main_candidates.index)
+
+    # --- CLUSTER BUILDING LOOP for MINI and MICRO ---
+    # Group by Hub ID, as clusters cannot span hubs
+    for hub_id, hub_group in remaining_df.groupby('Hub ID'):
         
-        # --- Attempt to form MAIN clusters (>= 180 orders) ---
-        while True:
-            current_cluster_societies = []
-            current_order_total = 0
+        # Sort by distance from depot to start with closer societies
+        hub_group['dist_from_depot'] = hub_group.apply(
+            lambda row: haversine(depot_coord, (row['Latitude'], row['Longitude'])), axis=1)
+        
+        societies_in_hub = hub_group.sort_values('dist_from_depot').to_dict('records')
+        
+        while societies_in_hub:
+            seed = societies_in_hub.pop(0)
+            current_cluster = [seed]
+            current_orders = seed['Orders']
             
-            # Greedily add societies until orders >= 180
-            temp_remaining = list(remaining_societies)
-            for society in temp_remaining:
-                if current_order_total < 180:
-                    current_cluster_societies.append(society)
-                    current_order_total += society['Orders']
-                    remaining_societies.remove(society)
+            # Find nearby societies to potentially add
+            potential_additions = []
+            for other in societies_in_hub:
+                # Proximity check: within 2km of the seed society
+                if haversine((seed['Latitude'], seed['Longitude']), (other['Latitude'], other['Longitude'])) <= 2.0:
+                    potential_additions.append(other)
             
-            if current_order_total >= 180:
-                cluster_points = [{'id': s['Society ID'], 'lat': s['Latitude'], 'lon': s['Longitude']} for s in current_cluster_societies]
-                path, distance = solve_tsp_nearest_neighbor(cluster_points, depot_coord)
-                
-                clusters.append({
-                    'Cluster ID': f"C{cluster_id_counter}",
-                    'Cluster Type': 'Main',
-                    'Societies': current_cluster_societies,
-                    'Total Orders': current_order_total,
-                    'Total Distance (km)': distance,
-                    'Delivery Sequence': path,
-                    'Hub ID': hub_id,
-                    'Cost': costs['main']
-                })
-                cluster_id_counter += 1
-            else:
-                # Put societies back if a valid Main cluster wasn't formed
-                remaining_societies.extend(current_cluster_societies)
-                break # Move to next cluster type
-
-        # --- Attempt to form MINI clusters (121-179 orders) ---
-        # This is a complex combinatorial problem. We'll use a simplified greedy approach.
-        # Note: A more advanced solution would use bin packing or other optimization algorithms.
-        while True:
-            # Try to find a combination that fits the mini cluster criteria
-            # For simplicity, we form one cluster at a time.
-            best_combo = []
-            best_combo_orders = 0
+            # --- Attempt to form a MINI Cluster (121-179 orders) ---
+            # Greedily add closest points until order limit is reached
+            temp_cluster_mini = list(current_cluster)
+            temp_orders_mini = current_orders
+            for addition in sorted(potential_additions, key=lambda p: haversine((seed['Latitude'], seed['Longitude']), (p['Latitude'], p['Longitude']))):
+                if temp_orders_mini + addition['Orders'] <= 179:
+                    temp_cluster_mini.append(addition)
+                    temp_orders_mini += addition['Orders']
             
-            # Let's take the largest remaining and see what fits
-            if not remaining_societies: break
-            
-            temp_remaining = list(remaining_societies)
-            base_society = temp_remaining.pop(0)
-            
-            current_combo = [base_society]
-            current_orders = base_society['Orders']
-            
-            for society in temp_remaining:
-                if 121 <= current_orders + society['Orders'] <= 179:
-                    current_combo.append(society)
-                    current_orders += society['Orders']
-            
-            if 121 <= current_orders <= 179:
-                cluster_points = [{'id': s['Society ID'], 'lat': s['Latitude'], 'lon': s['Longitude']} for s in current_combo]
-                path, distance = solve_tsp_nearest_neighbor(cluster_points, depot_coord)
-
-                if distance <= 15: # Mini cluster distance constraint
+            # Check if a valid Mini cluster was formed
+            if 121 <= temp_orders_mini <= 179:
+                path, distance = get_delivery_sequence(temp_cluster_mini, depot_coord)
+                # Mini cluster distance constraint: Total route <= 15km
+                if distance <= 15.0:
                     clusters.append({
-                        'Cluster ID': f"C{cluster_id_counter}",
-                        'Cluster Type': 'Mini',
-                        'Societies': current_combo,
-                        'Total Orders': current_orders,
-                        'Total Distance (km)': distance,
-                        'Delivery Sequence': path,
-                        'Hub ID': hub_id,
-                        'Cost': costs['mini']
+                        'Cluster ID': f"Mini-{cluster_id_counter}",
+                        'Type': 'Mini', 'Societies': temp_cluster_mini, 'Orders': temp_orders_mini, 
+                        'Distance': distance, 'Path': path, 'Cost': costs['mini']
                     })
                     cluster_id_counter += 1
-                    # Remove used societies from the main pool
-                    for society in current_combo:
-                        if society in remaining_societies:
-                            remaining_societies.remove(society)
-                else:
-                    # If it fails distance check, try again without this combo
-                    # For this simple model, we'll just move on.
-                    break
-            else:
-                break # No suitable mini cluster found in this iteration
+                    # Remove used societies from the pool
+                    used_ids = {s['Society ID'] for s in temp_cluster_mini}
+                    societies_in_hub = [s for s in societies_in_hub if s['Society ID'] not in used_ids]
+                    continue # Move to next seed
 
-        # --- Attempt to form MICRO clusters (<= 120 orders) ---
-        while remaining_societies:
-            base_society = remaining_societies.pop(0)
-            current_cluster_societies = [base_society]
-            current_order_total = base_society['Orders']
+            # --- If not a Mini, attempt to form a MICRO Cluster (<= 120 orders) ---
+            temp_cluster_micro = list(current_cluster)
+            temp_orders_micro = current_orders
+            for addition in sorted(potential_additions, key=lambda p: haversine((seed['Latitude'], seed['Longitude']), (p['Latitude'], p['Longitude']))):
+                if temp_orders_micro + addition['Orders'] <= 120:
+                    temp_cluster_micro.append(addition)
+                    temp_orders_micro += addition['Orders']
 
-            # Find nearby societies to add to the micro cluster
-            temp_remaining = list(remaining_societies)
-            for other_society in temp_remaining:
-                # Proximity check: every society must be close to the base society
-                dist_to_base = haversine((base_society['Latitude'], base_society['Longitude']),
-                                         (other_society['Latitude'], other_society['Longitude']), unit=Unit.KILOMETERS)
-                
-                if (current_order_total + other_society['Orders'] <= 120 and dist_to_base <= 2.0):
-                    current_cluster_societies.append(other_society)
-                    current_order_total += other_society['Orders']
-                    remaining_societies.remove(other_society)
-
-            cluster_points = [{'id': s['Society ID'], 'lat': s['Latitude'], 'lon': s['Longitude']} for s in current_cluster_societies]
-            path, distance = solve_tsp_nearest_neighbor(cluster_points, depot_coord)
-
-            if distance <= 10.0: # Micro cluster distance constraint
+            path, distance = get_delivery_sequence(temp_cluster_micro, depot_coord)
+            # Micro cluster distance constraint: Total route <= 10km
+            if distance <= 10.0:
                 clusters.append({
-                    'Cluster ID': f"C{cluster_id_counter}",
-                    'Cluster Type': 'Micro',
-                    'Societies': current_cluster_societies,
-                    'Total Orders': current_order_total,
-                    'Total Distance (km)': distance,
-                    'Delivery Sequence': path,
-                    'Hub ID': hub_id,
-                    'Cost': costs['micro']
+                    'Cluster ID': f"Micro-{cluster_id_counter}",
+                    'Type': 'Micro', 'Societies': temp_cluster_micro, 'Orders': temp_orders_micro,
+                    'Distance': distance, 'Path': path, 'Cost': costs['micro']
                 })
                 cluster_id_counter += 1
+                used_ids = {s['Society ID'] for s in temp_cluster_micro}
+                societies_in_hub = [s for s in societies_in_hub if s['Society ID'] not in used_ids]
             else:
-                # If it fails distance, societies become unclustered
-                unclustered_societies.extend(current_cluster_societies)
-    
-    # Process any societies that were left over
+                # If seed couldn't form a valid cluster, it becomes unclustered for now
+                unclustered_societies.append(seed)
+
+    # Process remaining unclustered societies
     for society in unclustered_societies:
+        path, distance = get_delivery_sequence([society], depot_coord)
         clusters.append({
-            'Cluster ID': f"U-{society['Society ID']}",
-            'Cluster Type': 'Unclustered',
-            'Societies': [society],
-            'Total Orders': society['Orders'],
-            'Total Distance (km)': 0,
-            'Delivery Sequence': ['Depot', society['Society ID']],
-            'Hub ID': society['Hub ID'],
-            'Cost': 0 # Or some penalty cost
+            'Cluster ID': f"Unclustered-{society['Society ID']}",
+            'Type': 'Unclustered', 'Societies': [society], 'Orders': society['Orders'], 
+            'Distance': distance, 'Path': path, 'Cost': 0
         })
 
     return clusters
 
-def create_summary_and_map(clusters, depot_coord):
-    """
-    Generates a summary DataFrame and an interactive Folium map from cluster data.
-    """
-    summary_data = []
-    if not clusters:
-        # Create an empty map centered on the depot if no clusters
-        m = folium.Map(location=depot_coord, zoom_start=12)
-        folium.Marker(depot_coord, popup="Depot", icon=folium.Icon(color='black', icon='industry', prefix='fa')).add_to(m)
-        return [], m._repr_html_()
-
-    for cluster in clusters:
-        total_orders = cluster['Total Orders']
-        cpo = (cluster['Cost'] / total_orders) if total_orders > 0 else 0
-        summary_data.append({
-            'Cluster ID': cluster['Cluster ID'],
-            'Cluster Type': cluster['Cluster Type'],
+def create_summary_df(clusters):
+    summary_rows = []
+    for c in clusters:
+        total_orders = c['Orders']
+        cpo = (c['Cost'] / total_orders) if total_orders > 0 else 0
+        summary_rows.append({
+            'Cluster ID': c['Cluster ID'],
+            'Cluster Type': c['Type'],
+            'No. of Societies': len(c['Societies']),
             'Total Orders': total_orders,
-            'Societies': [s['Society Name'] for s in cluster['Societies']],
-            'Society IDs': [s['Society ID'] for s in cluster['Societies']],
-            'Society Count': len(cluster['Societies']),
-            'Total Distance (km)': cluster['Total Distance (km)'],
-            'CPO': cpo,
-            'Delivery Sequence': [str(p) for p in cluster['Delivery Sequence']],
-            'Hub ID': cluster['Hub ID']
+            'Total Distance (km)': c['Distance'],
+            'CPO (₹)': round(cpo, 2),
+            'Delivery Sequence (by ID)': ' -> '.join(map(str, c['Path'])),
         })
+    return pd.DataFrame(summary_rows)
 
-    # Create Map
-    map_center = depot_coord
-    m = folium.Map(location=map_center, zoom_start=12)
-    
-    # Add Depot Marker
+def create_unified_map(clusters, depot_coord):
+    m = folium.Map(location=depot_coord, zoom_start=12, tiles="CartoDB positron")
     folium.Marker(depot_coord, popup="Depot", icon=folium.Icon(color='black', icon='industry', prefix='fa')).add_to(m)
-
-    colors = {'Main': 'blue', 'Mini': 'green', 'Micro': 'orange', 'Unclustered': 'red'}
-
-    for cluster in clusters:
-        color = colors.get(cluster['Cluster Type'], 'gray')
+    
+    colors = {'Main': 'blue', 'Mini': 'green', 'Micro': 'purple', 'Unclustered': 'red'}
+    
+    for c in clusters:
+        color = colors.get(c['Type'], 'gray')
         
-        # Draw lines for the delivery sequence (TSP path)
+        # Create a feature group for the cluster
+        fg = folium.FeatureGroup(name=f"{c['Cluster ID']} ({c['Type']})")
+
+        # Get coordinates for the delivery path
         path_coords = [depot_coord]
-        seq_map = {s['Society ID']: (s['Latitude'], s['Longitude']) for s in cluster['Societies']}
-        
-        # Start from depot, follow the sequence
-        for society_id in cluster['Delivery Sequence'][1:]: # Skip 'Depot' at start
+        seq_map = {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
+        for society_id in c['Path']:
             if society_id in seq_map:
                 path_coords.append(seq_map[society_id])
+        path_coords.append(depot_coord) # Return to depot
         
-        if len(path_coords) > 1:
-            folium.PolyLine(
-                path_coords,
-                color=color,
-                weight=2.5,
-                opacity=0.8,
-                tooltip=f"Cluster {cluster['Cluster ID']} ({cluster['Cluster Type']})"
-            ).add_to(m)
-        
-        # Add markers for each society
-        for society in cluster['Societies']:
+        # Draw lines and markers
+        if len(path_coords) > 2:
+            folium.PolyLine(path_coords, color=color, weight=2.5, opacity=0.8).add_to(fg)
+        for society in c['Societies']:
             folium.Marker(
                 location=[society['Latitude'], society['Longitude']],
-                popup=f"<b>{society['Society Name']}</b><br>ID: {society['Society ID']}<br>Orders: {society['Orders']}<br>Cluster: {cluster['Cluster ID']}",
-                tooltip=f"{society['Society Name']} ({society['Orders']} Orders)",
+                popup=f"<b>{society['Society Name']}</b><br>Orders: {society['Orders']}<br>Cluster: {c['Cluster ID']}",
                 icon=folium.Icon(color=color, icon='info-sign')
-            ).add_to(m)
-
-    return summary_data, m._repr_html_()
-
-
-# --- Flask Routes ---
-
-@app.route('/')
-def index():
-    """Renders the main upload page."""
-    return render_template('index.html')
-
-@app.route('/download_template')
-def download_template():
-    """Provides a downloadable CSV template."""
-    template_df = pd.DataFrame(columns=REQUIRED_COLUMNS)
-    buffer = io.StringIO()
-    template_df.to_csv(buffer, index=False)
-    buffer.seek(0)
-    return send_file(
-        io.BytesIO(buffer.getvalue().encode()),
-        mimetype='text/csv',
-        as_attachment=True,
-        download_name='society_template.csv'
-    )
-
-@app.route('/process', methods=['POST'])
-def process_data():
-    """Handles file upload, processing, and renders results."""
-    if 'file' not in request.files:
-        flash('No file part in the request.', 'danger')
-        return redirect(url_for('index'))
-
-    file = request.files['file']
-    if file.filename == '':
-        flash('No file selected.', 'danger')
-        return redirect(url_for('index'))
-
-    if file and allowed_file(file.filename):
-        try:
-            # Get form data
-            depot_lat = float(request.form.get('depot_lat'))
-            depot_lon = float(request.form.get('depot_lon'))
-            costs = {
-                'main': float(request.form.get('main_cost')),
-                'mini': float(request.form.get('mini_cost')),
-                'micro': float(request.form.get('micro_cost'))
-            }
-            depot_coord = (depot_lat, depot_lon)
-
-            # Read and validate data
-            df = pd.read_csv(file) if file.filename.endswith('.csv') else pd.read_excel(file)
-            validation_error = validate_columns(df)
-            if validation_error:
-                flash(validation_error, 'danger')
-                return redirect(url_for('index'))
-
-            # Perform clustering
-            clusters = perform_clustering(df, depot_coord, costs)
-            
-            # Generate summary and map
-            summary_data, map_html = create_summary_and_map(clusters, depot_coord)
-
-            # Store results in session for downloading
-            session['summary_data'] = summary_data
-            session['full_cluster_data'] = clusters
-            
-            flash('Processing complete!', 'success')
-            return render_template('results.html', summary_data=summary_data, map_html=map_html)
-
-        except Exception as e:
-            flash(f'An error occurred: {str(e)}', 'danger')
-            return redirect(url_for('index'))
-    else:
-        flash('File type not allowed. Please use CSV or XLSX.', 'warning')
-        return redirect(url_for('index'))
-
-@app.route('/download_summary')
-def download_summary():
-    """Downloads the full summary table as a CSV."""
-    summary_data = session.get('summary_data')
-    if not summary_data:
-        flash('No summary data available to download.', 'warning')
-        return redirect(url_for('index'))
-
-    df = pd.DataFrame(summary_data)
-    # Convert list columns to strings for CSV
-    df['Societies'] = df['Societies'].apply(lambda x: ', '.join(x))
-    df['Delivery Sequence'] = df['Delivery Sequence'].apply(lambda x: ' -> '.join(x))
-    
-    buffer = io.StringIO()
-    df.to_csv(buffer, index=False)
-    buffer.seek(0)
-    return send_file(
-        io.BytesIO(buffer.getvalue().encode()),
-        mimetype='text/csv',
-        as_attachment=True,
-        download_name='cluster_summary.csv'
-    )
-
-@app.route('/download_cluster_details/<cluster_id>')
-def download_cluster_details(cluster_id):
-    """Downloads the detailed society data for a single cluster."""
-    full_cluster_data = session.get('full_cluster_data')
-    if not full_cluster_data:
-        return "No cluster data found in session.", 404
-
-    target_cluster = next((c for c in full_cluster_data if c['Cluster ID'] == cluster_id), None)
-    
-    if not target_cluster:
-        return f"Cluster with ID {cluster_id} not found.", 404
+            ).add_to(fg)
         
-    df = pd.DataFrame(target_cluster['Societies'])
-    buffer = io.StringIO()
-    df.to_csv(buffer, index=False)
-    buffer.seek(0)
-    return send_file(
-        io.BytesIO(buffer.getvalue().encode()),
-        mimetype='text/csv',
-        as_attachment=True,
-        download_name=f'cluster_{cluster_id}_details.csv'
+        fg.add_to(m)
+        
+    folium.LayerControl().add_to(m)
+    return m
+
+
+# --- STREAMLIT UI ---
+st.title("🚚 Logistics Cluster Optimizer")
+
+# --- SIDEBAR ---
+with st.sidebar:
+    st.header("1. Depot Settings")
+    depot_lat = st.number_input("Depot Latitude", value=12.9716, format="%.6f")
+    depot_long = st.number_input("Depot Longitude", value=77.5946, format="%.6f")
+
+    st.header("2. Cluster Costs (Van + CEE)")
+    main_cost = st.number_input("Main Cluster Cost (₹)", value=834 + 333)
+    mini_cost = st.number_input("Mini Cluster Cost (₹)", value=700 + 200)
+    micro_cost = st.number_input("Micro Cluster Cost (₹)", value=500 + 167)
+    costs = {'main': main_cost, 'mini': mini_cost, 'micro': micro_cost}
+
+    st.header("3. Upload Data")
+    template = pd.DataFrame({'Society ID': [], 'Society Name': [], 'Latitude': [], 'Longitude': [], 'Orders': [], 'Hub ID': []})
+    st.download_button("Download Template", template.to_csv(index=False), "input_template.csv")
+    file = st.file_uploader("Upload Society Data CSV", type=["csv"])
+
+# --- MAIN PAGE ---
+if file is None:
+    st.info("Please upload a society data file to begin analysis.")
+    st.stop()
+
+try:
+    df_raw = pd.read_csv(file)
+    validation_error = validate_columns(df_raw)
+    if validation_error:
+        st.error(validation_error)
+        st.stop()
+except Exception as e:
+    st.error(f"Error reading or parsing file: {e}")
+    st.stop()
+
+# Use session state to store results
+if 'clusters' not in st.session_state:
+    st.session_state.clusters = None
+
+if st.button("🚀 Generate Clusters", type="primary"):
+    with st.spinner("Analyzing data and forming clusters..."):
+        st.session_state.clusters = run_clustering(df_raw, depot_lat, depot_long, costs)
+
+if st.session_state.clusters is not None:
+    clusters = st.session_state.clusters
+    summary_df = create_summary_df(clusters)
+    
+    # --- DISPLAY RESULTS ---
+    st.header("📊 Cluster Summary")
+    st.dataframe(summary_df)
+    
+    csv_buffer = BytesIO()
+    summary_df.to_csv(csv_buffer, index=False)
+    st.download_button(
+        "Download Full Summary (CSV)",
+        data=csv_buffer.getvalue(),
+        file_name="cluster_summary.csv",
+        mime="text/csv"
     )
 
-if __name__ == '__main__':
-    app.run(debug=True)
+    st.header("🗺️ Unified Map View")
+    st.info("You can toggle clusters on/off using the layer control icon in the top-right of the map.")
+    unified_map = create_unified_map(clusters, (depot_lat, depot_long))
+    st_folium(unified_map, width=1200, height=600, returned_objects=[])
+
+    st.header("🔍 Individual Cluster Details")
+    cluster_id_to_show = st.selectbox(
+        "Select a Cluster to Inspect",
+        options=summary_df['Cluster ID']
+    )
+    
+    selected_cluster = next((c for c in clusters if c['Cluster ID'] == cluster_id_to_show), None)
+
+    if selected_cluster:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader(f"Details for {selected_cluster['Cluster ID']}")
+            cluster_details_df = pd.DataFrame(selected_cluster['Societies'])
+            st.dataframe(cluster_details_df[['Society ID', 'Society Name', 'Orders']])
+            
+            detail_csv_buffer = BytesIO()
+            cluster_details_df.to_csv(detail_csv_buffer, index=False)
+            st.download_button(
+                f"Download Details for {selected_cluster['Cluster ID']}",
+                data=detail_csv_buffer.getvalue(),
+                file_name=f"cluster_{selected_cluster['Cluster ID']}_details.csv",
+                mime="text/csv"
+            )
+        with col2:
+            st.subheader("Route Map")
+            cluster_map = create_unified_map([selected_cluster], (depot_lat, depot_long))
+            st_folium(cluster_map, width=600, height=400, returned_objects=[])
