@@ -203,35 +203,25 @@ if st.session_state.get('clusters') is not None:
     csv_buffer = BytesIO(); summary_df[column_order].to_csv(csv_buffer, index=False, encoding='utf-8')
     st.download_button("Download Full Summary (CSV)", csv_buffer.getvalue(), "cluster_summary.csv", "text/csv")
 
-    # --- NEW: Cumulative Summary Section ---
     st.header("📈 Cumulative Summary by Cluster Type")
-    
-    # Calculate total cost per cluster to get a true weighted CPO
     temp_df = summary_df.copy()
     temp_df['Total Cost'] = temp_df['CPO (in Rs.)'] * temp_df['Total Orders']
-    
     cumulative_summary = temp_df.groupby('Cluster Type').agg(
-        Total_Routes=('Cluster ID', 'count'),
-        Total_Societies=('No. of Societies', 'sum'),
-        Total_Orders=('Total Orders', 'sum'),
-        Total_Cost=('Total Cost', 'sum')
+        Total_Routes=('Cluster ID', 'count'), Total_Societies=('No. of Societies', 'sum'),
+        Total_Orders=('Total Orders', 'sum'), Total_Cost=('Total Cost', 'sum')
     ).reset_index()
-
-    # Calculate weighted CPO
     cumulative_summary['Overall CPO (in Rs.)'] = cumulative_summary.apply(
         lambda row: (row['Total_Cost'] / row['Total_Orders']) if row['Total_Orders'] > 0 else 0,
         axis=1
     ).round(2)
-
-    # Final display table
-    st.dataframe(cumulative_summary[[
-        'Cluster Type', 'Total_Routes', 'Total_Societies', 'Total_Orders', 'Overall CPO (in Rs.)'
-    ]])
-    # --- END of Cumulative Summary Section ---
+    st.dataframe(cumulative_summary[['Cluster Type', 'Total_Routes', 'Total_Societies', 'Total_Orders', 'Overall CPO (in Rs.)']])
 
     st.header("🗺️ Unified Map View")
     st.info("You can toggle clusters on/off using the layer control icon in the top-right of the map.")
-    st_folium(create_unified_map(clusters, depot_coord), width=1200, height=600, returned_objects=[])
+    
+    # ---- THE FIX IS HERE ----
+    # Capture the return value to prevent it from being displayed on the page
+    map_data = st_folium(create_unified_map(clusters, depot_coord), width=1200, height=600, returned_objects=[])
 
     st.header("🔍 Individual Cluster Details")
     cluster_id_to_show = st.selectbox("Select a Cluster to Inspect", sorted(summary_df['Cluster ID'].tolist()))
