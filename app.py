@@ -17,7 +17,6 @@ def validate_columns(df):
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         return f"File is missing required columns: {', '.join(missing_cols)}"
-    
     for col in ['Latitude', 'Longitude', 'Orders', 'Hub ID']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     if df.isnull().values.any():
@@ -25,20 +24,13 @@ def validate_columns(df):
     return None
 
 def get_delivery_sequence(points, depot_coord):
-    """
-    Calculates the delivery sequence (path) and total round-trip distance for a cluster.
-    """
-    if not points:
-        return [], 0.0
+    """Calculates the delivery sequence (path) and total round-trip distance for a cluster."""
+    if not points: return [], 0.0
     point_coords = {p['Society ID']: (p['Latitude'], p['Longitude']) for p in points}
-    current_coord = depot_coord
-    unvisited_ids = set(point_coords.keys())
-    path = []
-    total_distance = 0.0
+    current_coord, unvisited_ids, path, total_distance = depot_coord, set(point_coords.keys()), [], 0.0
     while unvisited_ids:
         nearest_id = min(unvisited_ids, key=lambda pid: haversine(current_coord, point_coords[pid]))
-        distance_to_nearest = haversine(current_coord, point_coords[nearest_id])
-        total_distance += distance_to_nearest
+        total_distance += haversine(current_coord, point_coords[nearest_id])
         current_coord = point_coords[nearest_id]
         path.append(nearest_id)
         unvisited_ids.remove(nearest_id)
@@ -46,71 +38,47 @@ def get_delivery_sequence(points, depot_coord):
     return path, round(total_distance, 2)
 
 def get_distance_to_last_society(points, depot_coord):
-    """
-    Calculates the TSP path and then finds the straight-line distance from the depot to the last society in that path.
-    """
-    if not points:
-        return 0.0
+    """Calculates the TSP path and then finds the straight-line distance from the depot to the last society in that path."""
+    if not points: return 0.0
     path, _ = get_delivery_sequence(points, depot_coord)
-    if not path:
-        return 0.0
+    if not path: return 0.0
     last_society_id = path[-1]
     point_coords = {p['Society ID']: (p['Latitude'], p['Longitude']) for p in points}
-    last_society_coord = point_coords[last_society_id]
-    return round(haversine(depot_coord, last_society_coord), 2)
+    return round(haversine(depot_coord, point_coords[last_society_id]), 2)
 
 @st.cache_data
 def run_clustering(df, depot_lat, depot_lon, costs):
-    """
-    A robust, multi-pass, prioritized clustering algorithm.
-    """
-    all_clusters = []
-    cluster_id_counter = 1
+    """A robust, multi-pass, prioritized clustering algorithm."""
+    all_clusters, cluster_id_counter = [], 1
     societies_map = {s['Society ID']: s for s in df.to_dict('records')}
     unprocessed_ids = set(societies_map.keys())
     depot_coord = (depot_lat, depot_lon)
     for hub_id in df['Hub ID'].unique():
         hub_society_ids = {sid for sid in unprocessed_ids if societies_map[sid]['Hub ID'] == hub_id}
-        sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: societies_map[sid]['Orders'], reverse=True)
-        for seed_id in sorted_seeds:
-            if seed_id not in hub_society_ids: continue
-            seed = societies_map[seed_id]
-            potential_cluster, potential_orders = [seed], seed['Orders']
-            neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id and haversine((seed['Latitude'], seed['Longitude']), (societies_map[nid]['Latitude'], societies_map[nid]['Longitude'])) < 2.0]
-            for neighbor in sorted(neighbors, key=lambda s: s['Orders'], reverse=True):
-                if potential_orders + neighbor['Orders'] <= 220:
-                    potential_cluster.append(neighbor); potential_orders += neighbor['Orders']
-            if 180 <= potential_orders <= 220:
-                path, distance = get_delivery_sequence(potential_cluster, depot_coord)
-                all_clusters.append({'Cluster ID': f"Main-{cluster_id_counter}", 'Type': 'Main', 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs['main']})
-                cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
-        sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: societies_map[sid]['Orders'], reverse=True)
-        for seed_id in sorted_seeds:
-            if seed_id not in hub_society_ids: continue
-            seed = societies_map[seed_id]
-            potential_cluster, potential_orders = [seed], seed['Orders']
-            neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id and haversine((seed['Latitude'], seed['Longitude']), (societies_map[nid]['Latitude'], societies_map[nid]['Longitude'])) < 2.0]
-            for neighbor in sorted(neighbors, key=lambda s: s['Orders'], reverse=True):
-                if potential_orders + neighbor['Orders'] <= 179:
-                    potential_cluster.append(neighbor); potential_orders += neighbor['Orders']
-            if 121 <= potential_orders <= 179:
-                path, distance = get_delivery_sequence(potential_cluster, depot_coord)
-                all_clusters.append({'Cluster ID': f"Mini-{cluster_id_counter}", 'Type': 'Mini', 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs['mini']})
-                cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
-        sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: societies_map[sid]['Orders'], reverse=True)
-        for seed_id in sorted_seeds:
-            if seed_id not in hub_society_ids: continue
-            seed = societies_map[seed_id]
-            potential_cluster, potential_orders = [seed], seed['Orders']
-            neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id]
-            for neighbor in sorted(neighbors, key=lambda s: s['Orders'], reverse=True):
-                if potential_orders + neighbor['Orders'] <= 120:
-                    potential_cluster.append(neighbor); potential_orders += neighbor['Orders']
-            if 1 <= potential_orders <= 120:
-                dist_to_last = get_distance_to_last_society(potential_cluster, depot_coord)
-                if dist_to_last < 15.0:
+        for cluster_type in ['Main', 'Mini', 'Micro']:
+            sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: societies_map[sid]['Orders'], reverse=True)
+            for seed_id in sorted_seeds:
+                if seed_id not in hub_society_ids: continue
+                seed = societies_map[seed_id]
+                potential_cluster, potential_orders = [seed], seed['Orders']
+                if cluster_type in ['Main', 'Mini']:
+                    max_orders, proximity = (220, 2.0) if cluster_type == 'Main' else (179, 2.0)
+                    neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id and haversine((seed['Latitude'], seed['Longitude']), (societies_map[nid]['Latitude'], societies_map[nid]['Longitude'])) < proximity]
+                else: # Micro
+                    max_orders = 120
+                    neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id]
+                for neighbor in sorted(neighbors, key=lambda s: s['Orders'], reverse=True):
+                    if potential_orders + neighbor['Orders'] <= max_orders:
+                        potential_cluster.append(neighbor); potential_orders += neighbor['Orders']
+                
+                valid = False
+                if cluster_type == 'Main' and 180 <= potential_orders <= 220: valid = True
+                elif cluster_type == 'Mini' and 121 <= potential_orders <= 179: valid = True
+                elif cluster_type == 'Micro' and 1 <= potential_orders <= 120 and get_distance_to_last_society(potential_cluster, depot_coord) < 15.0: valid = True
+                
+                if valid:
                     path, distance = get_delivery_sequence(potential_cluster, depot_coord)
-                    all_clusters.append({'Cluster ID': f"Micro-{cluster_id_counter}", 'Type': 'Micro', 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs['micro']})
+                    all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs[cluster_type.lower()]})
                     cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
         for sid in hub_society_ids:
             society = societies_map[sid]
@@ -121,25 +89,53 @@ def run_clustering(df, depot_lat, depot_lon, costs):
 
 def create_summary_df(clusters, depot_coord):
     """
-    Creates the summary DataFrame with a detailed, human-readable delivery sequence.
+    Creates the summary DataFrame with a detailed, human-readable delivery sequence AND internal distance.
     """
     summary_rows = []
     for c in clusters:
-        total_orders, cpo = c['Orders'], (c['Cost'] / c['Orders']) if c['Orders'] > 0 else 0
-        id_to_name, id_to_coord = {s['Society ID']: s['Society Name'] for s in c['Societies']}, {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
-        delivery_sequence_str = id_to_name.get(c['Societies'][0]['Society ID'], "N/A") if not c['Path'] else ''
+        total_orders = c['Orders']
+        cpo = (c['Cost'] / total_orders) if total_orders > 0 else 0
+        
+        id_to_name = {s['Society ID']: s['Society Name'] for s in c['Societies']}
+        id_to_coord = {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
+        
+        # --- NEW: Calculate Internal Distance ---
+        internal_distance = 0.0
+        if len(c['Path']) > 1: # Only calculate if there is more than one society
+            # Sum the distances between consecutive points in the path
+            for i in range(len(c['Path']) - 1):
+                coord1 = id_to_coord[c['Path'][i]]
+                coord2 = id_to_coord[c['Path'][i+1]]
+                internal_distance += haversine(coord1, coord2)
+
+        # --- Build Detailed Delivery Sequence String (Unchanged) ---
+        delivery_sequence_str = ""
         if c['Path']:
-            journey_names, journey_coords = ['Depot'] + [id_to_name.get(sid, str(sid)) for sid in c['Path']], [depot_coord] + [id_to_coord.get(sid) for sid in c['Path']]
+            journey_names = ['Depot'] + [id_to_name.get(sid, str(sid)) for sid in c['Path']]
+            journey_coords = [depot_coord] + [id_to_coord.get(sid) for sid in c['Path']]
             sequence_parts = [f"{journey_names[i]} -> {journey_names[i+1]} ({haversine(journey_coords[i], journey_coords[i+1]):.2f} km)" for i in range(len(journey_coords) - 1)]
             sequence_parts.append(f"{journey_names[-1]} -> Depot ({haversine(journey_coords[-1], depot_coord):.2f} km)")
             delivery_sequence_str = ' | '.join(sequence_parts)
-        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance (km)': c['Distance'], 'CPO (₹)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str})
+        else:
+            # Handle single-society clusters
+            society_name = c['Societies'][0]['Society Name']
+            dist = haversine(depot_coord, id_to_coord[c['Societies'][0]['Society ID']])
+            delivery_sequence_str = f"Depot -> {society_name} ({dist:.2f} km) | {society_name} -> Depot ({dist:.2f} km)"
+
+        summary_rows.append({
+            'Cluster ID': c['Cluster ID'],
+            'Cluster Type': c['Type'],
+            'No. of Societies': len(c['Societies']),
+            'Total Orders': total_orders,
+            'Total Distance (km)': c['Distance'],
+            'Internal Distance (km)': round(internal_distance, 2), # NEW COLUMN
+            'CPO (₹)': round(cpo, 2),
+            'Delivery Sequence': delivery_sequence_str,
+        })
     return pd.DataFrame(summary_rows)
 
 def create_unified_map(clusters, depot_coord):
-    """
-    Creates the map with individual line segments showing distance for each leg of the journey.
-    """
+    """Creates the map with individual line segments showing distance for each leg of the journey."""
     m = folium.Map(location=depot_coord, zoom_start=12, tiles="CartoDB positron")
     folium.Marker(depot_coord, popup="Depot", icon=folium.Icon(color='black', icon='industry', prefix='fa')).add_to(m)
     colors = {'Main': 'blue', 'Mini': 'green', 'Micro': 'purple', 'Unclustered': 'red'}
@@ -156,6 +152,7 @@ def create_unified_map(clusters, depot_coord):
     folium.LayerControl().add_to(m)
     return m
 
+
 # --- STREAMLIT UI ---
 st.title("🚚 Logistics Cluster Optimizer")
 
@@ -163,7 +160,7 @@ with st.sidebar:
     st.header("1. Depot Settings")
     depot_lat = st.number_input("Depot Latitude", value=12.9716, format="%.6f")
     depot_long = st.number_input("Depot Longitude", value=77.5946, format="%.6f")
-    depot_coord = (depot_lat, depot_long) # Define depot_coord here
+    depot_coord = (depot_lat, depot_long)
 
     st.header("2. Cluster Costs")
     costs = {'main': st.number_input("Main Cluster Van Cost (₹)", 833) + st.number_input("Main Cluster CEE Cost (₹)", 333),
@@ -191,16 +188,17 @@ if 'clusters' not in st.session_state:
 if st.button("🚀 Generate Clusters", type="primary"):
     with st.spinner("Analyzing data and forming clusters..."):
         st.session_state.clusters = run_clustering(df_raw, depot_lat, depot_long, costs)
-        # REMOVED: st.session_state.depot_coord = depot_coord
 
 if st.session_state.get('clusters') is not None:
     clusters = st.session_state.clusters
-    # REMOVED: depot_coord = st.session_state.depot_coord <- THIS WAS THE ERROR
     
     summary_df = create_summary_df(clusters, depot_coord) 
     st.header("📊 Cluster Summary")
-    st.dataframe(summary_df.sort_values(by=['Cluster Type', 'Cluster ID']))
-    csv_buffer = BytesIO(); summary_df.to_csv(csv_buffer, index=False, encoding='utf-8')
+    # Define column order for better readability
+    column_order = ['Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 'Total Distance (km)', 'Internal Distance (km)', 'CPO (₹)', 'Delivery Sequence']
+    st.dataframe(summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
+    
+    csv_buffer = BytesIO(); summary_df[column_order].to_csv(csv_buffer, index=False, encoding='utf-8')
     st.download_button("Download Full Summary (CSV)", csv_buffer.getvalue(), "cluster_summary.csv", "text/csv")
 
     st.header("🗺️ Unified Map View")
@@ -217,8 +215,7 @@ if st.session_state.get('clusters') is not None:
             st.subheader(f"Details for {selected_cluster['Cluster ID']}")
             cluster_details_df = pd.DataFrame(selected_cluster['Societies'])
             st.dataframe(cluster_details_df[['Society ID', 'Society Name', 'Orders']])
-            detail_csv_buffer = BytesIO()
-            cluster_details_df.to_csv(detail_csv_buffer, index=False, encoding='utf-8')
+            detail_csv_buffer = BytesIO(); cluster_details_df.to_csv(detail_csv_buffer, index=False, encoding='utf-8')
             st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
         with col2:
             st.subheader("Route Map"); st_folium(create_unified_map([selected_cluster], depot_coord), width=600, height=400, returned_objects=[])
