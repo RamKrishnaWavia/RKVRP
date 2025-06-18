@@ -11,12 +11,7 @@ import logging
 
 logging.basicConfig(level=logging.ERROR)
 
-def calculate_route_distance(route):
-    distance = 0.0
-    for i in range(len(route) - 1):
-        distance += calculate_distance_km(route[i][0], route[i][1], route[i+1][0], route[i+1][1])
-    return distance
-
+# Utility Functions
 def calculate_distance_km(lat1, lon1, lat2, lon2):
     R = 6371.0
     lat1_rad = radians(lat1)
@@ -29,175 +24,172 @@ def calculate_distance_km(lat1, lon1, lat2, lon2):
     c = 2 * atan2(sqrt(a), sqrt(1 - a))
     return round(R * c, 2)
 
-def get_delivery_sequence(cluster_df, depot_lat, depot_long):
+def get_delivery_sequence(cluster_df):
     points = cluster_df[['Latitude', 'Longitude']].values.tolist()
-    names = cluster_df['Society'].tolist()
-    if len(points) == 1:
-        sequence = [f"{names[0]} (0 km)", "Total Distance: 0.0 km"]
-        return sequence, [points[0]], [0.0], 0.0, ""
-    visited = [False] * len(points)
+    names = cluster_df['Society Name'].tolist()
+    if not points:
+        return [], [], 0.0, ""
     sequence = []
-    order = []
-    distances = []
-    inefficiencies = []
-    current_index = 0
-    current_point = points[current_index]
-    visited[current_index] = True
-    sequence.append(f"{names[current_index]} (0 km)")
-    order.append(current_point)
-    distances.append(0)
-
-    for _ in range(len(points) - 1):
+    visited = [False] * len(points)
+    path = [0]
+    visited[0] = True
+    current = 0
+    total_distance = 0
+    while len(path) < len(points):
+        nearest = None
         min_dist = float('inf')
-        next_index = -1
         for i in range(len(points)):
             if not visited[i]:
-                dist = calculate_distance_km(current_point[0], current_point[1], points[i][0], points[i][1])
+                dist = calculate_distance_km(points[current][0], points[current][1], points[i][0], points[i][1])
                 if dist < min_dist:
                     min_dist = dist
-                    next_index = i
-        if next_index == -1:
-            break
-        visited[next_index] = True
-        inefficiency_flag = " 🚩" if min_dist > 1.5 else ""
-        sequence.append(f"{names[next_index]} ({min_dist} km){inefficiency_flag}")
-        distances.append(min_dist)
-        current_point = points[next_index]
-        order.append(current_point)
+                    nearest = i
+        if nearest is not None:
+            visited[nearest] = True
+            total_distance += min_dist
+            path.append(nearest)
+            current = nearest
+    delivery_seq = []
+    delivery_path = []
+    for i in range(len(path) - 1):
+        a = path[i]
+        b = path[i+1]
+        dist = calculate_distance_km(points[a][0], points[a][1], points[b][0], points[b][1])
+        delivery_seq.append(f"{names[a]} -> {names[b]} ({dist} km)")
+        delivery_path.append((points[a], points[b]))
+    return delivery_seq, delivery_path, total_distance, " | ".join(delivery_seq)
 
-    total_seq_distance = round(sum(distances), 2)
-    sequence.append(f"Total Distance: {total_seq_distance} km")
+def calculate_cpo(total_orders, van_cost, cee_cost=0):
+    if total_orders == 0:
+        return 0
+    return round((van_cost + cee_cost) / total_orders, 2)
 
-    path_summary = []
-    for i in range(len(order) - 1):
-        dist = calculate_distance_km(order[i][0], order[i][1], order[i+1][0], order[i+1][1])
-        path_summary.append(f"{names[i]} -> {names[i+1]} ({dist} km)")
-    delivery_path = " | ".join(path_summary)
-    sequence.append("Delivery Path: " + delivery_path)
-
-    return sequence, order, distances, total_seq_distance, delivery_path
-
-def is_within_seed_radius(seed_coord, coord, max_dist_km=2.0):
-    return calculate_distance_km(seed_coord[0], seed_coord[1], coord[0], coord[1]) <= max_dist_km
-
+# Sidebar Inputs
 st.sidebar.header("Depot Settings")
 depot_lat = st.sidebar.number_input("Depot Latitude", value=12.9716, format="%.6f")
 depot_long = st.sidebar.number_input("Depot Longitude", value=77.5946, format="%.6f")
 
 st.sidebar.header("Main Cluster Cost Settings")
-main_vehicle_cost = st.sidebar.number_input("Van Monthly Cost (₹)", value=35000)
+main_van_cost = st.sidebar.number_input("Van Cost (₹) [Main]", value=834)
+main_cee_cost = st.sidebar.number_input("CEE Cost (₹) [Main]", value=333)
 
 st.sidebar.header("Micro Cluster Cost Settings")
 micro_van_cost = st.sidebar.number_input("Van Cost (₹) [Micro]", value=500)
 micro_cee_cost = st.sidebar.number_input("CEE Cost (₹) [Micro]", value=167)
 
-st.sidebar.header("Cluster View")
-main_cluster_id = st.sidebar.text_input("Select Main Cluster ID")
-micro_cluster_id = st.sidebar.text_input("Select Micro Cluster ID")
+st.sidebar.markdown("### Download Input Template")
+template = pd.DataFrame({
+    'Society ID': [], 'Society Name': [], 'Latitude': [], 'Longitude': [], 'Orders': []
+})
+st.sidebar.download_button("Download Template", template.to_csv(index=False), "input_template.csv")
 
-st.header("Cluster Map Display")
-st.text("Map and cluster outputs will appear here based on selected Cluster ID")
-
-uploaded_file = st.file_uploader("Upload Society Data CSV", type=["csv"])
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-else:
+# Upload File
+st.title("Milk Delivery Cluster Optimizer")
+file = st.file_uploader("Upload Society Data CSV", type=["csv"])
+if file is None:
     st.stop()
 
+df = pd.read_csv(file)
+st.dataframe(df)
+
+main_clusters = []
+micro_clusters = []
+unclustered = []
+used = set()
+
+# Main Clustering (Orders >= 180 + 2 km radius)
+cluster_id = 1
+for i, row in df.iterrows():
+    if row['Orders'] >= 180 and i not in used:
+        base = (row['Latitude'], row['Longitude'])
+        cluster_df = df.loc[df.index != i].copy()
+        cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
+        nearby = cluster_df[cluster_df['Distance'] <= 2.0]
+        members = df.loc[nearby.index.union([i])]
+        main_clusters.append((cluster_id, members))
+        used.update(members.index)
+        cluster_id += 1
+
+# Micro Clustering (Remaining, proximity < 2km, total dist < 10 km, orders < 120)
+micro_id = 1
+remaining = df.loc[~df.index.isin(used)]
+remaining = remaining[remaining['Orders'] < 120]
+while not remaining.empty:
+    seed = remaining.iloc[0]
+    base = (seed['Latitude'], seed['Longitude'])
+    cluster_df = remaining.copy()
+    cluster_df['Distance'] = cluster_df.apply(lambda x: calculate_distance_km(base[0], base[1], x['Latitude'], x['Longitude']), axis=1)
+    members = cluster_df[cluster_df['Distance'] <= 2.0]
+    seq, _, total_dist, _ = get_delivery_sequence(members)
+    if total_dist <= 10:
+        micro_clusters.append((micro_id, members))
+        used.update(members.index)
+        micro_id += 1
+    remaining = df.loc[~df.index.isin(used)]
+    remaining = remaining[remaining['Orders'] < 120]
+
+# Unclustered
+unclustered_df = df.loc[~df.index.isin(used)]
+
+# Dropdowns
+main_ids = [f"Main-{cid}" for cid, _ in main_clusters]
+micro_ids = [f"Micro-{cid}" for cid, _ in micro_clusters]
+selected_main = st.selectbox("Select Main Cluster", ["None"] + main_ids)
+selected_micro = st.selectbox("Select Micro Cluster", ["None"] + micro_ids)
+
+# Show Map
+def show_cluster_on_map(cluster_df, title):
+    m = folium.Map(location=[depot_lat, depot_long], zoom_start=13)
+    for _, row in cluster_df.iterrows():
+        folium.Marker([row['Latitude'], row['Longitude']], tooltip=row['Society Name']).add_to(m)
+    return st_folium(m, width=700, height=500)
+
+if selected_main != "None":
+    cid = int(selected_main.split('-')[1])
+    members = next(c[1] for c in main_clusters if c[0] == cid)
+    st.subheader(f"Map for Main Cluster {cid}")
+    show_cluster_on_map(members, f"Main Cluster {cid}")
+
+if selected_micro != "None":
+    cid = int(selected_micro.split('-')[1])
+    members = next(c[1] for c in micro_clusters if c[0] == cid)
+    st.subheader(f"Map for Micro Cluster {cid}")
+    show_cluster_on_map(members, f"Micro Cluster {cid}")
+
+# Summary Table
 summary_rows = []
-cluster_metrics = []
-all_clusters_summary = []
+def add_summary(cid, members, ctype, vcost, ccost):
+    total_orders = members['Orders'].sum()
+    seq, _, tdist, path = get_delivery_sequence(members)
+    cpo = calculate_cpo(total_orders, vcost, ccost)
+    return {
+        'Cluster Type': ctype,
+        'Cluster ID': cid,
+        'No. of Societies': len(members),
+        'Total Orders': total_orders,
+        'Total Distance (km)': tdist,
+        'CPO (₹)': cpo,
+        'Delivery Sequence': path
+    }
 
-for cluster_id in df['Cluster ID'].unique():
-    cluster_data = df[df['Cluster ID'] == cluster_id]
-    cluster_type = cluster_data['Cluster Type'].iloc[0]
-    total_orders = sum(cluster_data['Orders'])
-    num_societies = len(cluster_data)
-    cost = 0
-    if cluster_type == "main":
-        cost = main_vehicle_cost / max(total_orders, 1)
-    elif cluster_type == "micro":
-        cost = (micro_van_cost + micro_cee_cost) / max(total_orders, 1)
+for cid, members in main_clusters:
+    summary_rows.append(add_summary(cid, members, "Main", main_van_cost, main_cee_cost))
 
-    sequence, route_points, dists, total_dist, delivery_path = get_delivery_sequence(cluster_data, depot_lat, depot_long)
+for cid, members in micro_clusters:
+    summary_rows.append(add_summary(cid, members, "Micro", micro_van_cost, micro_cee_cost))
 
-    cluster_metrics.append({
-        "Cluster ID": cluster_id,
-        "Cluster Type": cluster_type,
-        "No of Societies": num_societies,
-        "Total Orders": total_orders,
-        "Total Distance (km)": total_dist,
-        "CPO (₹)": round(cost, 2),
-        "Delivery Sequence": delivery_path
+for _, row in unclustered_df.iterrows():
+    summary_rows.append({
+        'Cluster Type': 'Unclustered',
+        'Cluster ID': row['Society ID'],
+        'No. of Societies': 1,
+        'Total Orders': row['Orders'],
+        'Total Distance (km)': 0,
+        'CPO (₹)': 0,
+        'Delivery Sequence': row['Society Name']
     })
-
-    all_clusters_summary.append({
-        "Cluster ID": cluster_id,
-        "Cluster Type": cluster_type,
-        "No of Societies": num_societies,
-        "Total Orders": total_orders,
-        "Total Distance (km)": total_dist,
-        "CPO (₹)": round(cost, 2),
-        "Delivery Sequence": delivery_path
-    })
-
-    for i, row in cluster_data.iterrows():
-        summary_rows.append({
-            "Cluster ID": row['Cluster ID'],
-            "Society": row['Society'],
-            "Latitude": row['Latitude'],
-            "Longitude": row['Longitude'],
-            "Orders": row['Orders'],
-            "Cluster Type": cluster_type,
-            "Total Cost": round(cost * row['Orders'], 2),
-            "Delivery Path": delivery_path,
-            "Total Distance (km)": total_dist
-        })
 
 summary_df = pd.DataFrame(summary_rows)
-metrics_df = pd.DataFrame(cluster_metrics)
-all_clusters_df = pd.DataFrame(all_clusters_summary)
-
-main_summary_df = summary_df[summary_df['Cluster Type'] == 'main']
-micro_summary_df = summary_df[summary_df['Cluster Type'] == 'micro']
-
-st.subheader("Download Summary Files")
-st.download_button("Download Main Cluster Summary", main_summary_df.to_csv(index=False), file_name="main_cluster_summary.csv")
-st.download_button("Download Micro Cluster Summary", micro_summary_df.to_csv(index=False), file_name="micro_cluster_summary.csv")
-st.download_button("Download Cluster Metrics Summary", metrics_df.to_csv(index=False), file_name="cluster_metrics_summary.csv")
-st.download_button("Download All Cluster Summary (with metrics)", all_clusters_df.to_csv(index=False), file_name="all_clusters_summary.csv")
-
-# Display Main Cluster Map
-if main_cluster_id:
-    main_df = df[(df['Cluster ID'] == main_cluster_id) & (df['Cluster Type'] == 'main')]
-    if not main_df.empty:
-        main_map = folium.Map(location=[depot_lat, depot_long], zoom_start=14)
-        sequence, path_points, dists, total_dist, path_summary = get_delivery_sequence(main_df, depot_lat, depot_long)
-        for i, row in main_df.iterrows():
-            folium.Marker([row['Latitude'], row['Longitude']], tooltip=row['Society']).add_to(main_map)
-        if len(path_points) > 1:
-            folium.PolyLine(path_points, color="blue", weight=3).add_to(main_map)
-        st.subheader("Main Cluster Map")
-        st_folium(main_map, width=700, height=500)
-
-# Display Micro Cluster Map
-if micro_cluster_id:
-    micro_df = df[(df['Cluster ID'] == micro_cluster_id) & (df['Cluster Type'] == 'micro')]
-    if not micro_df.empty:
-        micro_map = folium.Map(location=[depot_lat, depot_long], zoom_start=14)
-        sequence, path_points, dists, total_dist, path_summary = get_delivery_sequence(micro_df, depot_lat, depot_long)
-        for i, row in micro_df.iterrows():
-            folium.Marker([row['Latitude'], row['Longitude']], tooltip=row['Society']).add_to(micro_map)
-        if len(path_points) > 1:
-            folium.PolyLine(path_points, color="green", weight=3).add_to(micro_map)
-        st.subheader("Micro Cluster Map")
-        st_folium(micro_map, width=700, height=500)
-
-st.subheader("Cluster Summary View")
+st.subheader("Cluster Summary")
 st.dataframe(summary_df)
-
-st.subheader("Cluster Metrics Summary View")
-st.dataframe(metrics_df)
-
-st.subheader("All Cluster Summary View")
-st.dataframe(all_clusters_df)
+st.download_button("Download Cluster Summary", summary_df.to_csv(index=False), file_name="cluster_summary.csv")
