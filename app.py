@@ -152,7 +152,7 @@ def create_unified_map(clusters, depot_coord):
 
 
 # --- STREAMLIT UI ---
-st.markdown("<h1 style='text-align: center;'> 🚚 RK - Delivery Cluster Optimizer and Sequencing</h1>", unsafe_allow_html=True)
+st.markdown("<div style='text-align: center;'><h1> 🚚 RK - Delivery Cluster Optimizer and Sequencing</h1></div>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("1. Depot Settings")
