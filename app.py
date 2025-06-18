@@ -88,9 +88,7 @@ def run_clustering(df, depot_lat, depot_lon, costs):
     return all_clusters
 
 def create_summary_df(clusters, depot_coord):
-    """
-    Creates the summary DataFrame with the new requested column headers.
-    """
+    """Creates the summary DataFrame with the new requested column headers."""
     summary_rows = []
     for c in clusters:
         total_orders = c['Orders']
@@ -127,9 +125,9 @@ def create_summary_df(clusters, depot_coord):
             'Cluster Type': c['Type'],
             'No. of Societies': len(c['Societies']),
             'Total Orders': total_orders,
-            'Total Distance Fwd + Rev Leg (km)': c['Distance'],             # RENAMED
-            'Distance Between the Societies (km)': round(internal_distance, 2), # RENAMED
-            'CPO (in Rs.)': round(cpo, 2),                                  # RENAMED
+            'Total Distance Fwd + Rev Leg (km)': c['Distance'],
+            'Distance Between the Societies (km)': round(internal_distance, 2),
+            'CPO (in Rs.)': round(cpo, 2),
             'Delivery Sequence': delivery_sequence_str,
         })
     return pd.DataFrame(summary_rows)
@@ -154,7 +152,7 @@ def create_unified_map(clusters, depot_coord):
 
 
 # --- STREAMLIT UI ---
-st.title("🚚 Logistics Cluster Optimizer")
+st.title(" 🚚 RK - Delivery Cluster Optimizer and Sequencing") # <-- TITLE CHANGED HERE
 
 with st.sidebar:
     st.header("1. Depot Settings")
@@ -195,20 +193,13 @@ if st.session_state.get('clusters') is not None:
     summary_df = create_summary_df(clusters, depot_coord) 
     st.header("📊 Cluster Summary")
     
-    # Define the new column order for better readability
     column_order = [
-        'Cluster ID', 
-        'Cluster Type', 
-        'No. of Societies', 
-        'Total Orders', 
-        'Total Distance Fwd + Rev Leg (km)',      # RENAMED
-        'Distance Between the Societies (km)',    # RENAMED
-        'CPO (in Rs.)',                           # RENAMED
-        'Delivery Sequence'
+        'Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 
+        'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 
+        'CPO (in Rs.)', 'Delivery Sequence'
     ]
     st.dataframe(summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
     
-    # Ensure the downloaded CSV also uses the new column order
     csv_buffer = BytesIO(); summary_df[column_order].to_csv(csv_buffer, index=False, encoding='utf-8')
     st.download_button("Download Full Summary (CSV)", csv_buffer.getvalue(), "cluster_summary.csv", "text/csv")
 
