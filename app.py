@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import folium
-from folium.plugins import PolyLineTextPath # Import the new plugin
+from folium.plugins import AntPath # Reverted back to AntPath
 from streamlit_folium import st_folium
 from haversine import haversine, Unit
 from io import BytesIO
@@ -123,9 +123,9 @@ def create_summary_df(clusters, depot_coord, circuity_factor):
         summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str})
     return pd.DataFrame(summary_rows)
 
-def create_unified_map(clusters, depot_coord, circuity_factor, use_arrows=False):
+def create_unified_map(clusters, depot_coord, circuity_factor, use_ant_path=False):
     """
-    Creates the map. If use_arrows is True, it draws directional arrows on the lines.
+    Creates the map. If use_ant_path is True, it draws animated directional lines.
     """
     m = folium.Map(location=depot_coord, zoom_start=12, tiles="CartoDB positron")
     folium.Marker(depot_coord, popup="Depot", icon=folium.Icon(color='black', icon='industry', prefix='fa')).add_to(m)
@@ -138,22 +138,21 @@ def create_unified_map(clusters, depot_coord, circuity_factor, use_arrows=False)
         path_locations = [coord for name, coord in full_path_info if coord is not None]
 
         if len(path_locations) > 1:
-            # Draw the base line for the route
-            folium.PolyLine(
-                locations=path_locations,
-                color=color,
-                weight=2.5,
-                opacity=0.8
-            ).add_to(fg)
-            
-            # If requested, add the directional arrows on top of the line
-            if use_arrows:
-                PolyLineTextPath(
-                    path_locations,
-                    '  ▶  ',  # Using a unicode arrow character
-                    repeat=True,
-                    offset=0,
-                    attributes={'font-size': '16', 'fill': color, 'font-weight': 'bold'}
+            if use_ant_path:
+                AntPath(
+                    locations=path_locations,
+                    delay=800,
+                    dash_array=[20, 30],
+                    color=color,
+                    weight=5,
+                    pulse_color="#DDDDDD"
+                ).add_to(fg)
+            else:
+                folium.PolyLine(
+                    locations=path_locations,
+                    color=color,
+                    weight=2.5,
+                    opacity=0.8
                 ).add_to(fg)
 
         for society in c['Societies']:
@@ -240,6 +239,5 @@ if st.session_state.get('clusters') is not None:
                 st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
             with col2:
                 st.subheader("Route Map")
-                # --- THE FIX IS HERE ---
-                # Call the map function with use_arrows=True for the individual map
-                _ = st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_arrows=True), width=600, height=400, returned_objects=[])
+                # --- Reverted back to the stable AntPath solution ---
+                _ = st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_ant_path=True), width=600, height=400, returned_objects=[])
