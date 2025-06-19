@@ -162,37 +162,33 @@ st.markdown("<div style='text-align: center;'><h1> 🚚 RK - Delivery Cluster Op
 
 with st.sidebar:
     st.header("1. Depot Settings")
-    
-    # --- NEW: Depot Selection Logic ---
-    def update_depot_coords():
-        """Callback function to update lat/lon inputs when a depot is selected."""
-        selected_depot_name = st.session_state.city_selector
-        if selected_depot_name == "Custom":
-            # You can set default custom values or leave them as they were
-            pass
-        else:
-            depot_data = PREDEFINED_DEPOTS[selected_depot_name]
-            st.session_state.lat_input = depot_data["lat"]
-            st.session_state.lon_input = depot_data["lon"]
-    
-    depot_options = list(PREDEFINED_DEPOTS.keys())
-    
-    # Initialize session state for the first run
-    if 'lat_input' not in st.session_state:
-        first_city_data = PREDEFINED_DEPOTS[depot_options[0]]
-        st.session_state.lat_input = first_city_data['lat']
-        st.session_state.lon_input = first_city_data['lon']
-        st.session_state.city_selector = depot_options[0]
 
+    # --- NEW, ROBUST Depot Selection Logic ---
+    # This callback function updates the session state for lat/lon when a city is chosen
+    def update_depot_from_selection():
+        city = st.session_state.city_selector
+        if city != "Custom":
+            st.session_state.depot_lat = PREDEFINED_DEPOTS[city]["lat"]
+            st.session_state.depot_lon = PREDEFINED_DEPOTS[city]["lon"]
+
+    # Initialize the session state for lat/lon on the very first run
+    if "depot_lat" not in st.session_state:
+        first_city = list(PREDEFINED_DEPOTS.keys())[0]
+        st.session_state.depot_lat = PREDEFINED_DEPOTS[first_city]["lat"]
+        st.session_state.depot_lon = PREDEFINED_DEPOTS[first_city]["lon"]
+
+    # The selectbox's state is independent, but its change triggers the update
     st.selectbox(
         "Select a Predefined Depot",
-        options=depot_options + ["Custom"],
+        options=list(PREDEFINED_DEPOTS.keys()) + ["Custom"],
         key="city_selector",
-        on_change=update_depot_coords,
+        on_change=update_depot_from_selection,
+        index=0 # Default to the first city in the list
     )
 
-    depot_lat = st.number_input("Depot Latitude", key="lat_input", format="%.6f")
-    depot_long = st.number_input("Depot Longitude", key="lon_input", format="%.6f")
+    # These number inputs are now controlled by the session state, which the callback modifies
+    depot_lat = st.number_input("Depot Latitude", key="depot_lat", format="%.6f")
+    depot_long = st.number_input("Depot Longitude", key="depot_lon", format="%.6f")
     st.caption("Select a depot to pre-fill coordinates, or choose 'Custom' and edit them manually.")
     
     depot_coord = (depot_lat, depot_long)
