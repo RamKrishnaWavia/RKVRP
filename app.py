@@ -218,9 +218,6 @@ if st.session_state.get('clusters') is not None:
 
     st.header("🗺️ Unified Map View")
     st.info("You can toggle clusters on/off using the layer control icon in the top-right of the map.")
-    
-    # ---- THE FIX IS HERE ----
-    # Capture the return value to prevent it from being displayed on the page
     map_data = st_folium(create_unified_map(clusters, depot_coord), width=1200, height=600, returned_objects=[])
 
     st.header("🔍 Individual Cluster Details")
@@ -236,4 +233,7 @@ if st.session_state.get('clusters') is not None:
             detail_csv_buffer = BytesIO(); cluster_details_df.to_csv(detail_csv_buffer, index=False, encoding='utf-8')
             st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
         with col2:
-            st.subheader("Route Map"); st_folium(create_unified_map([selected_cluster], depot_coord), width=600, height=400, returned_objects=[])
+            st.subheader("Route Map")
+            # --- THE FIX IS HERE ---
+            # Assign the return value of the second map to a variable
+            _ = st_folium(create_unified_map([selected_cluster], depot_coord), width=600, height=400, returned_objects=[])
