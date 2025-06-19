@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import folium
-from folium.plugins import MarkerCluster, AntPath # Import AntPath
+from folium.plugins import PolyLineTextPath # Import the new plugin
 from streamlit_folium import st_folium
 from haversine import haversine, Unit
 from io import BytesIO
@@ -123,8 +123,10 @@ def create_summary_df(clusters, depot_coord, circuity_factor):
         summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str})
     return pd.DataFrame(summary_rows)
 
-def create_unified_map(clusters, depot_coord, circuity_factor, use_ant_path=False):
-    """Creates the map. If use_ant_path is True, it draws animated directional lines."""
+def create_unified_map(clusters, depot_coord, circuity_factor, use_arrows=False):
+    """
+    Creates the map. If use_arrows is True, it draws directional arrows on the lines.
+    """
     m = folium.Map(location=depot_coord, zoom_start=12, tiles="CartoDB positron")
     folium.Marker(depot_coord, popup="Depot", icon=folium.Icon(color='black', icon='industry', prefix='fa')).add_to(m)
     colors = {'Main': 'blue', 'Mini': 'green', 'Micro': 'purple', 'Unclustered': 'red'}
@@ -132,13 +134,30 @@ def create_unified_map(clusters, depot_coord, circuity_factor, use_ant_path=Fals
         color, fg = colors.get(c['Type'], 'gray'), folium.FeatureGroup(name=f"{c['Cluster ID']} ({c['Type']})")
         id_to_name, id_to_coord = {s['Society ID']: s['Society Name'] for s in c['Societies']}, {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
         full_path_info = [("Depot", depot_coord)] + ([(id_to_name.get(sid, str(sid)), id_to_coord.get(sid)) for sid in c['Path']] if c['Path'] else []) + [("Depot", depot_coord)]
+        
         path_locations = [coord for name, coord in full_path_info if coord is not None]
+
         if len(path_locations) > 1:
-            if use_ant_path:
-                AntPath(locations=path_locations, delay=800, dash_array=[20, 30], color=color, weight=5, pulse_color="#DDDDDD").add_to(fg)
-            else:
-                folium.PolyLine(locations=path_locations, color=color, weight=2.5, opacity=0.8).add_to(fg)
-        for society in c['Societies']: folium.Marker(location=[society['Latitude'], society['Longitude']], popup=f"<b>{society['Society Name']}</b><br>Orders: {society['Orders']}<br>Cluster: {c['Cluster ID']}", icon=folium.Icon(color=color, icon='info-sign')).add_to(fg)
+            # Draw the base line for the route
+            folium.PolyLine(
+                locations=path_locations,
+                color=color,
+                weight=2.5,
+                opacity=0.8
+            ).add_to(fg)
+            
+            # If requested, add the directional arrows on top of the line
+            if use_arrows:
+                PolyLineTextPath(
+                    path_locations,
+                    '  ▶  ',  # Using a unicode arrow character
+                    repeat=True,
+                    offset=0,
+                    attributes={'font-size': '16', 'fill': color, 'font-weight': 'bold'}
+                ).add_to(fg)
+
+        for society in c['Societies']:
+            folium.Marker(location=[society['Latitude'], society['Longitude']], popup=f"<b>{society['Society Name']}</b><br>Orders: {society['Orders']}<br>Cluster: {c['Cluster ID']}", icon=folium.Icon(color=color, icon='info-sign')).add_to(fg)
         fg.add_to(m)
     folium.LayerControl().add_to(m)
     return m
@@ -210,30 +229,17 @@ if st.session_state.get('clusters') is not None:
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader(f"Details for {selected_cluster['Cluster ID']}")
-                
-                # --- THE FIX IS HERE ---
-                # Create the base DataFrame
                 cluster_details_df = pd.DataFrame(selected_cluster['Societies'])
-                
-                # Calculate the CPO for this specific cluster
                 cluster_orders = selected_cluster['Orders']
                 cluster_cost = selected_cluster['Cost']
                 cluster_cpo = (cluster_cost / cluster_orders) if cluster_orders > 0 else 0
-                
-                # Add the CPO as a new column to the DataFrame
                 cluster_details_df['CPO (in Rs.)'] = round(cluster_cpo, 2)
-                
-                # Rename the 'Orders' column to 'Total Orders' for clarity
                 cluster_details_df.rename(columns={'Orders': 'Total Orders'}, inplace=True)
-
-                # Display the DataFrame with the new column and order
                 st.dataframe(cluster_details_df[['Society ID', 'Society Name', 'Total Orders', 'CPO (in Rs.)']])
-                
-                # The download button will now automatically include the new column
                 detail_csv_buffer = BytesIO(); cluster_details_df.to_csv(detail_csv_buffer, index=False, encoding='utf-8')
                 st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
-                # --- END OF FIX ---
-                
             with col2:
                 st.subheader("Route Map")
-                _ = st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_ant_path=True), width=600, height=400, returned_objects=[])
+                # --- THE FIX IS HERE ---
+                # Call the map function with use_arrows=True for the individual map
+                _ = st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_arrows=True), width=600, height=400, returned_objects=[])
