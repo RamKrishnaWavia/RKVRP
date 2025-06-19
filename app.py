@@ -10,12 +10,12 @@ st.set_page_config(layout="wide")
 
 # --- DATA & CONSTANTS ---
 PREDEFINED_DEPOTS = {
-    "Ahmd": {"lat": 22.911, "lon": 72.425},
-    "Bang - Nel": {"lat": 13.06821829, "lon": 77.44607278},
-    "Bang - Soukya": {"lat": 12.98946539, "lon": 77.78629337},
+    "Ahmedabad": {"lat": 22.911, "lon": 72.425},
+    "Bangalore Nelamangala": {"lat": 13.06821829, "lon": 77.44607278},
+    "Bangalore Soukya Road": {"lat": 12.98946539, "lon": 77.78629337},
     "Chennai": {"lat": 13.045, "lon": 80.024},
-    "Gur - Udyog Vihar": {"lat": 28.4813978, "lon": 77.0522889},
-    "Hyd - Balanagar": {"lat": 17.48467009, "lon": 78.44890182},
+    "Gurgaon Udyog Vihar": {"lat": 28.4813978, "lon": 77.0522889},
+    "Hyderabad Balanagar": {"lat": 17.48467009, "lon": 78.44890182},
     "Kolkata": {"lat": 22.494, "lon": 88.594},
     "Mumbai": {"lat": 19.276, "lon": 73.092},
     "Noida": {"lat": 28.53, "lon": 77.412},
