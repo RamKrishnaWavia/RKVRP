@@ -26,16 +26,17 @@ PREDEFINED_DEPOTS = {
 
 def validate_columns(df):
     """Validate if the dataframe contains all required columns and correct data types."""
-    # CHANGED: Hub ID -> Hub Name
-    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub Name'}
+    # CHANGED: Added Hub ID back to required columns
+    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name'}
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         return f"File is missing required columns: {', '.join(missing_cols)}"
-    # CHANGED: Hub ID is no longer required to be numeric
-    for col in ['Latitude', 'Longitude', 'Orders']:
+    
+    # CHANGED: Hub ID is now required to be numeric again
+    for col in ['Latitude', 'Longitude', 'Orders', 'Hub ID']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     if df.isnull().values.any():
-        return "File contains non-numeric or empty values in required numeric columns (Lat, Lon, Orders). Please check."
+        return "File contains non-numeric or empty values in required numeric columns (Lat, Lon, Orders, Hub ID). Please check."
     return None
 
 def calculate_route_distance(coord1, coord2, circuity_factor):
@@ -72,7 +73,7 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
     societies_map = {s['Society ID']: s for s in df.to_dict('records')}
     unprocessed_ids = set(societies_map.keys())
     depot_coord = (depot_lat, depot_lon)
-    # CHANGED: Grouping by Hub Name
+    # Grouping is done by Hub Name for user-friendliness
     for hub_name in df['Hub Name'].unique():
         hub_society_ids = {sid for sid in unprocessed_ids if societies_map[sid]['Hub Name'] == hub_name}
         for cluster_type in ['Main', 'Mini', 'Micro']:
@@ -98,13 +99,11 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
                 
                 if valid:
                     path, distance = get_delivery_sequence(potential_cluster, depot_coord, circuity_factor)
-                    # Add Hub Name to the cluster dictionary for easier filtering later
                     all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs[cluster_type.lower()], 'Hub Name': hub_name})
                     cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
         for sid in hub_society_ids:
             society = societies_map[sid]
             path, distance = get_delivery_sequence([society], depot_coord, circuity_factor)
-            # Add Hub Name here as well
             all_clusters.append({'Cluster ID': f"Unclustered-{sid}", 'Type': 'Unclustered', 'Societies': [society], 'Orders': society['Orders'], 'Distance': distance, 'Path': path, 'Cost': 0, 'Hub Name': hub_name})
         unprocessed_ids -= {s['Society ID'] for s in df[df['Hub Name'] == hub_name].to_dict('records')}
     return all_clusters
@@ -191,8 +190,8 @@ with st.sidebar:
              'micro': st.number_input("Micro Cluster Van Cost (₹)", 500) + st.number_input("Micro Cluster CEE Cost (₹)", 200)}
 
     st.header("3. Upload Data")
-    # CHANGED: Template now includes Hub Name
-    template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub Name'])
+    # CHANGED: Template now includes both Hub ID and Hub Name
+    template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name'])
     template_csv = template_df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Template CSV", template_csv, 'input_template.csv', 'text/csv')
     file = st.file_uploader("Upload Society Data CSV", type=["csv"])
@@ -274,8 +273,13 @@ if st.session_state.get('clusters') is not None:
                         cluster_cpo = (cluster_cost / cluster_orders) if cluster_orders > 0 else 0
                         cluster_details_df['CPO (in Rs.)'] = round(cluster_cpo, 2)
                         cluster_details_df.rename(columns={'Orders': 'Total Orders'}, inplace=True)
-                        st.dataframe(cluster_details_df[['Society ID', 'Society Name', 'Total Orders', 'CPO (in Rs.)']])
-                        detail_csv_buffer = BytesIO(); cluster_details_df.to_csv(detail_csv_buffer, index=False, encoding='utf-8')
+                        
+                        # --- THE FIX IS HERE ---
+                        # Display Hub ID and Hub Name in the detailed view
+                        detail_cols = ['Society ID', 'Society Name', 'Total Orders', 'Hub ID', 'Hub Name', 'CPO (in Rs.)']
+                        st.dataframe(cluster_details_df[detail_cols])
+                        
+                        detail_csv_buffer = BytesIO(); cluster_details_df[detail_cols].to_csv(detail_csv_buffer, index=False, encoding='utf-8')
                         st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
                     with col2:
                         st.subheader("Route Map")
