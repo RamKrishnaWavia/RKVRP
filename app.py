@@ -144,8 +144,8 @@ st.markdown("<div style='text-align: center;'><h1> 🚚 RK - Delivery Cluster Op
 
 with st.sidebar:
     st.header("1. Depot Settings")
-    depot_lat = st.number_input("Depot Latitude", value=12.9716, format="%.6f")
-    depot_long = st.number_input("Depot Longitude", value=77.5946, format="%.6f")
+    depot_lat = st.number_input("Depot Latitude", value=12.989465394574593, format="%.6f")
+    depot_long = st.number_input("Depot Longitude", value=77.7862933674243, format="%.6f")
     depot_coord = (depot_lat, depot_long)
 
     # --- CHANGE: Added Circuity Factor ---
