@@ -10,12 +10,12 @@ st.set_page_config(layout="wide")
 
 # --- DATA & CONSTANTS ---
 PREDEFINED_DEPOTS = {
-    "Ahmedabad": {"lat": 22.911, "lon": 72.425},
-    "Bangalore Nelamangala": {"lat": 13.06821829, "lon": 77.44607278},
-    "Bangalore Soukya Road": {"lat": 12.98946539, "lon": 77.78629337},
+    "Ahmd": {"lat": 22.911, "lon": 72.425},
+    "Bang - Nel": {"lat": 13.06821829, "lon": 77.44607278},
+    "Bang - Soukya": {"lat": 12.98946539, "lon": 77.78629337},
     "Chennai": {"lat": 13.045, "lon": 80.024},
-    "Gurgaon Udyog Vihar": {"lat": 28.4813978, "lon": 77.0522889},
-    "Hyderabad Balanagar": {"lat": 17.48467009, "lon": 78.44890182},
+    "Gur - Udyog Vihar": {"lat": 28.4813978, "lon": 77.0522889},
+    "Hyd - Balanagar": {"lat": 17.48467009, "lon": 78.44890182},
     "Kolkata": {"lat": 22.494, "lon": 88.594},
     "Mumbai": {"lat": 19.276, "lon": 73.092},
     "Noida": {"lat": 28.53, "lon": 77.412},
@@ -163,36 +163,32 @@ st.markdown("<div style='text-align: center;'><h1> 🚚 RK - Delivery Cluster Op
 with st.sidebar:
     st.header("1. Depot Settings")
 
-    # --- NEW, ROBUST Depot Selection Logic ---
-    # This callback function updates the session state for lat/lon when a city is chosen
     def update_depot_from_selection():
         city = st.session_state.city_selector
         if city != "Custom":
             st.session_state.depot_lat = PREDEFINED_DEPOTS[city]["lat"]
             st.session_state.depot_lon = PREDEFINED_DEPOTS[city]["lon"]
 
-    # Initialize the session state for lat/lon on the very first run
     if "depot_lat" not in st.session_state:
         first_city = list(PREDEFINED_DEPOTS.keys())[0]
         st.session_state.depot_lat = PREDEFINED_DEPOTS[first_city]["lat"]
         st.session_state.depot_lon = PREDEFINED_DEPOTS[first_city]["lon"]
+        # Set the default city selector state as well
+        if "city_selector" not in st.session_state:
+            st.session_state.city_selector = first_city
 
-    # The selectbox's state is independent, but its change triggers the update
     st.selectbox(
         "Select a Predefined Depot",
         options=list(PREDEFINED_DEPOTS.keys()) + ["Custom"],
         key="city_selector",
         on_change=update_depot_from_selection,
-        index=0 # Default to the first city in the list
     )
 
-    # These number inputs are now controlled by the session state, which the callback modifies
     depot_lat = st.number_input("Depot Latitude", key="depot_lat", format="%.6f")
     depot_long = st.number_input("Depot Longitude", key="depot_lon", format="%.6f")
     st.caption("Select a depot to pre-fill coordinates, or choose 'Custom' and edit them manually.")
     
     depot_coord = (depot_lat, depot_long)
-    # --- END of Depot Selection Logic ---
 
     st.header("2. Routing & Cost Settings")
     circuity_factor = st.slider("Circuity Factor (for driving distance estimation)", 1.0, 2.0, 1.4, 0.1, help="Adjust to estimate driving distance from straight-line distance. 1.4 = 40% longer.")
@@ -218,12 +214,21 @@ except Exception as e:
 
 if 'clusters' not in st.session_state:
     st.session_state.clusters = None
+    st.session_state.last_run_depot_coord = None # Initialize
 
 if st.button("🚀 Generate Clusters", type="primary"):
     with st.spinner("Analyzing data and forming clusters..."):
         st.session_state.clusters = run_clustering(df_raw, depot_lat, depot_long, costs, circuity_factor)
+        # --- NEW: Store the coordinates used for this run ---
+        st.session_state.last_run_depot_coord = depot_coord
 
+# --- NEW: Check for stale data before displaying results ---
 if st.session_state.get('clusters') is not None:
+    # Check if the current depot settings match the settings used for the last run
+    if st.session_state.last_run_depot_coord != depot_coord:
+        st.warning("Depot settings have changed. The displayed results are for the previous location. Please click 'Generate Clusters' to update.")
+    
+    # The results are still displayed, but with a clear warning if they are stale
     with st.container():
         clusters = st.session_state.clusters
         
