@@ -9,7 +9,6 @@ from io import BytesIO
 st.set_page_config(layout="wide")
 
 # --- UTILITY & ALGORITHM FUNCTIONS ---
-# (These functions are correct and remain unchanged)
 
 def validate_columns(df):
     """Validate if the dataframe contains all required columns and correct data types."""
@@ -33,7 +32,9 @@ def get_delivery_sequence(points, depot_coord, circuity_factor):
     point_coords = {p['Society ID']: (p['Latitude'], p['Longitude']) for p in points}
     current_coord, unvisited_ids, path, total_distance = depot_coord, set(point_coords.keys()), [], 0.0
     while unvisited_ids:
-        nearest_id = min(unvisited_ids, key=lambda pid: calculate_route_distance(current_coord, point_coords[pid], circuity_factor))
+        # Use straight-line distance for finding the next nearest point for the TSP path
+        nearest_id = min(unvisited_ids, key=lambda pid: haversine(current_coord, point_coords[pid]))
+        # Add the estimated driving distance to the total
         total_distance += calculate_route_distance(current_coord, point_coords[nearest_id], circuity_factor)
         current_coord = point_coords[nearest_id]
         path.append(nearest_id)
@@ -52,7 +53,7 @@ def get_distance_to_last_society(points, depot_coord, circuity_factor):
 
 @st.cache_data
 def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
-    """A robust, multi-pass, prioritized clustering algorithm using a circuity factor."""
+    """A robust, multi-pass, prioritized clustering algorithm using the hybrid distance approach."""
     all_clusters, cluster_id_counter = [], 1
     societies_map = {s['Society ID']: s for s in df.to_dict('records')}
     unprocessed_ids = set(societies_map.keys())
@@ -65,22 +66,28 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
                 if seed_id not in hub_society_ids: continue
                 seed = societies_map[seed_id]
                 potential_cluster, potential_orders = [seed], seed['Orders']
+                
+                # --- HYBRID LOGIC ---
+                # 1. For Main/Mini, find neighbors using STABLE, straight-line distance
                 if cluster_type in ['Main', 'Mini']:
-                    max_orders, proximity = (220, 2.0) if cluster_type == 'Main' else (179, 2.0)
-                    neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id and calculate_route_distance((seed['Latitude'], seed['Longitude']), (societies_map[nid]['Latitude'], societies_map[nid]['Longitude']), circuity_factor) < proximity]
-                else: # Micro
+                    max_orders = 220 if cluster_type == 'Main' else 179
+                    neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id and haversine((seed['Latitude'], seed['Longitude']), (societies_map[nid]['Latitude'], societies_map[nid]['Longitude'])) < 2.0]
+                else: # Micro cluster can pull from anywhere in the hub
                     max_orders = 120
                     neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id]
+                
                 for neighbor in sorted(neighbors, key=lambda s: s['Orders'], reverse=True):
                     if potential_orders + neighbor['Orders'] <= max_orders:
                         potential_cluster.append(neighbor); potential_orders += neighbor['Orders']
                 
                 valid = False
+                # 2. Check rules. Micro rule uses circuity factor as it's a ROUTE property.
                 if cluster_type == 'Main' and 180 <= potential_orders <= 220: valid = True
                 elif cluster_type == 'Mini' and 121 <= potential_orders <= 179: valid = True
                 elif cluster_type == 'Micro' and 1 <= potential_orders <= 120 and get_distance_to_last_society(potential_cluster, depot_coord, circuity_factor) < 15.0: valid = True
                 
                 if valid:
+                    # 3. Calculate final route distances for reporting using the circuity factor
                     path, distance = get_delivery_sequence(potential_cluster, depot_coord, circuity_factor)
                     all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs[cluster_type.lower()]})
                     cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
@@ -92,34 +99,20 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
     return all_clusters
 
 def create_summary_df(clusters, depot_coord, circuity_factor):
-    """
-    Creates the summary DataFrame with the robust internal distance calculation.
-    """
+    """Creates summary DataFrame, using circuity factor for all displayed distances."""
     summary_rows = []
     for c in clusters:
         total_orders, cpo = c['Orders'], (c['Cost'] / c['Orders']) if c['Orders'] > 0 else 0
         id_to_name, id_to_coord = {s['Society ID']: s['Society Name'] for s in c['Societies']}, {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
-        
-        # --- NEW & IMPROVED Internal Distance Calculation ---
         internal_distance = 0.0
         if c['Path'] and len(c['Path']) > 0:
-            # Get the total round trip distance that was already calculated
             total_distance = c['Distance']
-            
-            # Find the coordinates of the first and last stops in the sequence
             first_stop_coord = id_to_coord[c['Path'][0]]
             last_stop_coord = id_to_coord[c['Path'][-1]]
-            
-            # Calculate the distance of the first and last legs
             dist_depot_to_first = calculate_route_distance(depot_coord, first_stop_coord, circuity_factor)
             dist_last_to_depot = calculate_route_distance(last_stop_coord, depot_coord, circuity_factor)
-            
-            # The internal distance is the total minus these two legs
             internal_distance = total_distance - dist_depot_to_first - dist_last_to_depot
-            # Ensure it's not negative due to floating point rounding
             internal_distance = max(0, internal_distance)
-
-        # Build Detailed Delivery Sequence String (Unchanged)
         delivery_sequence_str = "Depot"
         if c['Path']:
             nodes = [("Depot", depot_coord)] + [(id_to_name.get(sid), id_to_coord.get(sid)) for sid in c['Path']]
@@ -131,12 +124,7 @@ def create_summary_df(clusters, depot_coord, circuity_factor):
         else:
              dist = calculate_route_distance(depot_coord, id_to_coord[c['Societies'][0]['Society ID']], circuity_factor)
              delivery_sequence_str = f"Depot -> {c['Societies'][0]['Society Name']} ({dist:.2f} km) -> Depot ({dist:.2f} km)"
-
-        summary_rows.append({
-            'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders,
-            'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2),
-            'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str,
-        })
+        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str})
     return pd.DataFrame(summary_rows)
 
 def create_unified_map(clusters, depot_coord, circuity_factor):
@@ -168,7 +156,7 @@ with st.sidebar:
     depot_coord = (depot_lat, depot_long)
 
     st.header("2. Routing & Cost Settings")
-    circuity_factor = st.slider("Circuity Factor (for driving distance estimation)", 1.0, 2.0, 1.4, 0.1, help="Adjust to estimate driving distance from straight-line distance. 1.4 means 40% longer than a straight line.")
+    circuity_factor = st.slider("Circuity Factor (for driving distance estimation)", 1.0, 2.0, 1.4, 0.1, help="Adjust to estimate driving distance from straight-line distance. 1.4 = 40% longer than a straight line.")
     
     costs = {'main': st.number_input("Main Cluster Van Cost (₹)", 833) + st.number_input("Main Cluster CEE Cost (₹)", 333),
              'mini': st.number_input("Mini Cluster Van Cost (₹)", 1000) + st.number_input("Mini Cluster CEE Cost (₹)", 200),
