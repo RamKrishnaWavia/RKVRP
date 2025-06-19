@@ -9,7 +9,6 @@ from io import BytesIO
 st.set_page_config(layout="wide")
 
 # --- DATA & CONSTANTS ---
-# CHANGED: Updated the depot names to be more descriptive
 PREDEFINED_DEPOTS = {
     "Ahmedabad": {"lat": 22.911, "lon": 72.425},
     "Bangalore Nelamanagala": {"lat": 13.06821829, "lon": 77.44607278},
@@ -268,7 +267,21 @@ if st.session_state.get('clusters') is not None:
                 col1, col2 = st.columns(2)
                 with col1:
                     st.subheader(f"Details for {selected_cluster['Cluster ID']}")
-                    cluster_details_df = pd.DataFrame(selected_cluster['Societies'])
+                    
+                    # --- THE FIX IS HERE ---
+                    # Create the original DataFrame of societies
+                    cluster_details_df_unsorted = pd.DataFrame(selected_cluster['Societies'])
+                    
+                    # Get the delivery sequence
+                    delivery_path = selected_cluster['Path']
+                    
+                    # Re-order the DataFrame to match the delivery sequence
+                    cluster_details_df_unsorted.set_index('Society ID', inplace=True)
+                    # The .loc indexer ensures the order is correct.
+                    # We drop rows with IDs not in the path, which handles single-society clusters cleanly.
+                    cluster_details_df = cluster_details_df_unsorted.loc[delivery_path].reset_index()
+                    
+                    # Calculate CPO and add the column
                     cluster_orders = selected_cluster['Orders']
                     cluster_cost = selected_cluster['Cost']
                     cluster_cpo = (cluster_cost / cluster_orders) if cluster_orders > 0 else 0
@@ -278,8 +291,11 @@ if st.session_state.get('clusters') is not None:
                     detail_cols = ['Society ID', 'Society Name', 'Hub ID', 'Hub Name', 'Total Orders', 'CPO (in Rs.)']
                     st.dataframe(cluster_details_df[detail_cols])
                     
-                    detail_csv_buffer = BytesIO(); cluster_details_df[detail_cols].to_csv(detail_csv_buffer, index=False, encoding='utf-8')
+                    detail_csv_buffer = BytesIO()
+                    # The downloaded CSV will now be in the correct sequence
+                    cluster_details_df[detail_cols].to_csv(detail_csv_buffer, index=False, encoding='utf-8')
                     st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
+                    # --- END OF FIX ---
                 with col2:
                     st.subheader("Route Map")
                     _ = st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_ant_path=True), width=600, height=400, returned_objects=[])
