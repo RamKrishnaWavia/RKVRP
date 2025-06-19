@@ -9,6 +9,7 @@ from io import BytesIO
 st.set_page_config(layout="wide")
 
 # --- UTILITY & ALGORITHM FUNCTIONS ---
+# (These functions are correct and remain unchanged)
 
 def validate_columns(df):
     """Validate if the dataframe contains all required columns and correct data types."""
@@ -91,16 +92,34 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
     return all_clusters
 
 def create_summary_df(clusters, depot_coord, circuity_factor):
-    """Creates summary DataFrame, using circuity factor for all displayed distances."""
+    """
+    Creates the summary DataFrame with the robust internal distance calculation.
+    """
     summary_rows = []
     for c in clusters:
         total_orders, cpo = c['Orders'], (c['Cost'] / c['Orders']) if c['Orders'] > 0 else 0
         id_to_name, id_to_coord = {s['Society ID']: s['Society Name'] for s in c['Societies']}, {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
+        
+        # --- NEW & IMPROVED Internal Distance Calculation ---
         internal_distance = 0.0
-        if len(c['Path']) > 1:
-            for i in range(len(c['Path']) - 1):
-                internal_distance += calculate_route_distance(id_to_coord[c['Path'][i]], id_to_coord[c['Path'][i+1]], circuity_factor)
+        if c['Path'] and len(c['Path']) > 0:
+            # Get the total round trip distance that was already calculated
+            total_distance = c['Distance']
+            
+            # Find the coordinates of the first and last stops in the sequence
+            first_stop_coord = id_to_coord[c['Path'][0]]
+            last_stop_coord = id_to_coord[c['Path'][-1]]
+            
+            # Calculate the distance of the first and last legs
+            dist_depot_to_first = calculate_route_distance(depot_coord, first_stop_coord, circuity_factor)
+            dist_last_to_depot = calculate_route_distance(last_stop_coord, depot_coord, circuity_factor)
+            
+            # The internal distance is the total minus these two legs
+            internal_distance = total_distance - dist_depot_to_first - dist_last_to_depot
+            # Ensure it's not negative due to floating point rounding
+            internal_distance = max(0, internal_distance)
 
+        # Build Detailed Delivery Sequence String (Unchanged)
         delivery_sequence_str = "Depot"
         if c['Path']:
             nodes = [("Depot", depot_coord)] + [(id_to_name.get(sid), id_to_coord.get(sid)) for sid in c['Path']]
@@ -144,11 +163,10 @@ st.markdown("<div style='text-align: center;'><h1> 🚚 RK - Delivery Cluster Op
 
 with st.sidebar:
     st.header("1. Depot Settings")
-    depot_lat = st.number_input("Depot Latitude", value=12.989465394574593, format="%.6f")
-    depot_long = st.number_input("Depot Longitude", value=77.7862933674243, format="%.6f")
+    depot_lat = st.number_input("Depot Latitude", value=12.9716, format="%.6f")
+    depot_long = st.number_input("Depot Longitude", value=77.5946, format="%.6f")
     depot_coord = (depot_lat, depot_long)
 
-    # --- CHANGE: Added Circuity Factor ---
     st.header("2. Routing & Cost Settings")
     circuity_factor = st.slider("Circuity Factor (for driving distance estimation)", 1.0, 2.0, 1.4, 0.1, help="Adjust to estimate driving distance from straight-line distance. 1.4 means 40% longer than a straight line.")
     
@@ -199,7 +217,6 @@ if st.session_state.get('clusters') is not None:
     st.info("You can toggle clusters on/off using the layer control icon in the top-right of the map.")
     map_data = st_folium(create_unified_map(clusters, depot_coord, circuity_factor), width=1200, height=600, returned_objects=[])
 
-    # --- CHANGE: Encapsulate the individual details section in a container ---
     with st.container():
         st.header("🔍 Individual Cluster Details")
         cluster_id_to_show = st.selectbox("Select a Cluster to Inspect", sorted(summary_df['Cluster ID'].tolist()))
@@ -215,5 +232,4 @@ if st.session_state.get('clusters') is not None:
                 st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
             with col2:
                 st.subheader("Route Map")
-                # Assign the return value to a variable to prevent it from being displayed
                 _ = st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor), width=600, height=400, returned_objects=[])
