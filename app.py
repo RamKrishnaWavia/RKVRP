@@ -1,12 +1,26 @@
 import streamlit as st
 import pandas as pd
 import folium
-from folium.plugins import AntPath # Reverted back to AntPath
+from folium.plugins import AntPath
 from streamlit_folium import st_folium
 from haversine import haversine, Unit
 from io import BytesIO
 
 st.set_page_config(layout="wide")
+
+# --- DATA & CONSTANTS ---
+PREDEFINED_DEPOTS = {
+    "Ahmd": {"lat": 22.911, "lon": 72.425},
+    "Bang - Nel": {"lat": 13.06821829, "lon": 77.44607278},
+    "Bang - Soukya": {"lat": 12.98946539, "lon": 77.78629337},
+    "Chennai": {"lat": 13.045, "lon": 80.024},
+    "Gur - Udyog Vihar": {"lat": 28.4813978, "lon": 77.0522889},
+    "Hyd - Balanagar": {"lat": 17.48467009, "lon": 78.44890182},
+    "Kolkata": {"lat": 22.494, "lon": 88.594},
+    "Mumbai": {"lat": 19.276, "lon": 73.092},
+    "Noida": {"lat": 28.53, "lon": 77.412},
+    "Pune Hinjewadi": {"lat": 18.528, "lon": 73.863},
+}
 
 # --- UTILITY & ALGORITHM FUNCTIONS ---
 # (These functions are correct and remain unchanged)
@@ -124,9 +138,7 @@ def create_summary_df(clusters, depot_coord, circuity_factor):
     return pd.DataFrame(summary_rows)
 
 def create_unified_map(clusters, depot_coord, circuity_factor, use_ant_path=False):
-    """
-    Creates the map. If use_ant_path is True, it draws animated directional lines.
-    """
+    """Creates the map. If use_ant_path is True, it draws animated directional lines."""
     m = folium.Map(location=depot_coord, zoom_start=12, tiles="CartoDB positron")
     folium.Marker(depot_coord, popup="Depot", icon=folium.Icon(color='black', icon='industry', prefix='fa')).add_to(m)
     colors = {'Main': 'blue', 'Mini': 'green', 'Micro': 'purple', 'Unclustered': 'red'}
@@ -134,29 +146,13 @@ def create_unified_map(clusters, depot_coord, circuity_factor, use_ant_path=Fals
         color, fg = colors.get(c['Type'], 'gray'), folium.FeatureGroup(name=f"{c['Cluster ID']} ({c['Type']})")
         id_to_name, id_to_coord = {s['Society ID']: s['Society Name'] for s in c['Societies']}, {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
         full_path_info = [("Depot", depot_coord)] + ([(id_to_name.get(sid, str(sid)), id_to_coord.get(sid)) for sid in c['Path']] if c['Path'] else []) + [("Depot", depot_coord)]
-        
         path_locations = [coord for name, coord in full_path_info if coord is not None]
-
         if len(path_locations) > 1:
             if use_ant_path:
-                AntPath(
-                    locations=path_locations,
-                    delay=800,
-                    dash_array=[20, 30],
-                    color=color,
-                    weight=5,
-                    pulse_color="#DDDDDD"
-                ).add_to(fg)
+                AntPath(locations=path_locations, delay=800, dash_array=[20, 30], color=color, weight=5, pulse_color="#DDDDDD").add_to(fg)
             else:
-                folium.PolyLine(
-                    locations=path_locations,
-                    color=color,
-                    weight=2.5,
-                    opacity=0.8
-                ).add_to(fg)
-
-        for society in c['Societies']:
-            folium.Marker(location=[society['Latitude'], society['Longitude']], popup=f"<b>{society['Society Name']}</b><br>Orders: {society['Orders']}<br>Cluster: {c['Cluster ID']}", icon=folium.Icon(color=color, icon='info-sign')).add_to(fg)
+                folium.PolyLine(locations=path_locations, color=color, weight=2.5, opacity=0.8).add_to(fg)
+        for society in c['Societies']: folium.Marker(location=[society['Latitude'], society['Longitude']], popup=f"<b>{society['Society Name']}</b><br>Orders: {society['Orders']}<br>Cluster: {c['Cluster ID']}", icon=folium.Icon(color=color, icon='info-sign')).add_to(fg)
         fg.add_to(m)
     folium.LayerControl().add_to(m)
     return m
@@ -166,9 +162,41 @@ st.markdown("<div style='text-align: center;'><h1> 🚚 RK - Delivery Cluster Op
 
 with st.sidebar:
     st.header("1. Depot Settings")
-    depot_lat = st.number_input("Depot Latitude", value=12.9716, format="%.6f")
-    depot_long = st.number_input("Depot Longitude", value=77.5946, format="%.6f")
+    
+    # --- NEW: Depot Selection Logic ---
+    def update_depot_coords():
+        """Callback function to update lat/lon inputs when a depot is selected."""
+        selected_depot_name = st.session_state.city_selector
+        if selected_depot_name == "Custom":
+            # You can set default custom values or leave them as they were
+            pass
+        else:
+            depot_data = PREDEFINED_DEPOTS[selected_depot_name]
+            st.session_state.lat_input = depot_data["lat"]
+            st.session_state.lon_input = depot_data["lon"]
+    
+    depot_options = list(PREDEFINED_DEPOTS.keys())
+    
+    # Initialize session state for the first run
+    if 'lat_input' not in st.session_state:
+        first_city_data = PREDEFINED_DEPOTS[depot_options[0]]
+        st.session_state.lat_input = first_city_data['lat']
+        st.session_state.lon_input = first_city_data['lon']
+        st.session_state.city_selector = depot_options[0]
+
+    st.selectbox(
+        "Select a Predefined Depot",
+        options=depot_options + ["Custom"],
+        key="city_selector",
+        on_change=update_depot_coords,
+    )
+
+    depot_lat = st.number_input("Depot Latitude", key="lat_input", format="%.6f")
+    depot_long = st.number_input("Depot Longitude", key="lon_input", format="%.6f")
+    st.caption("Select a depot to pre-fill coordinates, or choose 'Custom' and edit them manually.")
+    
     depot_coord = (depot_lat, depot_long)
+    # --- END of Depot Selection Logic ---
 
     st.header("2. Routing & Cost Settings")
     circuity_factor = st.slider("Circuity Factor (for driving distance estimation)", 1.0, 2.0, 1.4, 0.1, help="Adjust to estimate driving distance from straight-line distance. 1.4 = 40% longer.")
@@ -178,6 +206,9 @@ with st.sidebar:
              'micro': st.number_input("Micro Cluster Van Cost (₹)", 500) + st.number_input("Micro Cluster CEE Cost (₹)", 200)}
 
     st.header("3. Upload Data")
+    template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID'])
+    template_csv = template_df.to_csv(index=False).encode('utf-8')
+    st.download_button("Download Template CSV", template_csv, 'input_template.csv', 'text/csv')
     file = st.file_uploader("Upload Society Data CSV", type=["csv"])
 
 if file is None:
@@ -239,5 +270,4 @@ if st.session_state.get('clusters') is not None:
                 st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
             with col2:
                 st.subheader("Route Map")
-                # --- Reverted back to the stable AntPath solution ---
                 _ = st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_ant_path=True), width=600, height=400, returned_objects=[])
