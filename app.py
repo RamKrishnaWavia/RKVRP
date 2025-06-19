@@ -23,18 +23,19 @@ PREDEFINED_DEPOTS = {
 }
 
 # --- UTILITY & ALGORITHM FUNCTIONS ---
-# (These functions are correct and remain unchanged)
 
 def validate_columns(df):
     """Validate if the dataframe contains all required columns and correct data types."""
-    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID'}
+    # CHANGED: Hub ID -> Hub Name
+    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub Name'}
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         return f"File is missing required columns: {', '.join(missing_cols)}"
-    for col in ['Latitude', 'Longitude', 'Orders', 'Hub ID']:
+    # CHANGED: Hub ID is no longer required to be numeric
+    for col in ['Latitude', 'Longitude', 'Orders']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     if df.isnull().values.any():
-        return "File contains non-numeric or empty values in required numeric columns (Lat, Lon, Orders, Hub ID). Please check."
+        return "File contains non-numeric or empty values in required numeric columns (Lat, Lon, Orders). Please check."
     return None
 
 def calculate_route_distance(coord1, coord2, circuity_factor):
@@ -71,8 +72,9 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
     societies_map = {s['Society ID']: s for s in df.to_dict('records')}
     unprocessed_ids = set(societies_map.keys())
     depot_coord = (depot_lat, depot_lon)
-    for hub_id in df['Hub ID'].unique():
-        hub_society_ids = {sid for sid in unprocessed_ids if societies_map[sid]['Hub ID'] == hub_id}
+    # CHANGED: Grouping by Hub Name
+    for hub_name in df['Hub Name'].unique():
+        hub_society_ids = {sid for sid in unprocessed_ids if societies_map[sid]['Hub Name'] == hub_name}
         for cluster_type in ['Main', 'Mini', 'Micro']:
             sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: societies_map[sid]['Orders'], reverse=True)
             for seed_id in sorted_seeds:
@@ -96,13 +98,15 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
                 
                 if valid:
                     path, distance = get_delivery_sequence(potential_cluster, depot_coord, circuity_factor)
-                    all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs[cluster_type.lower()]})
+                    # Add Hub Name to the cluster dictionary for easier filtering later
+                    all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs[cluster_type.lower()], 'Hub Name': hub_name})
                     cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
         for sid in hub_society_ids:
             society = societies_map[sid]
             path, distance = get_delivery_sequence([society], depot_coord, circuity_factor)
-            all_clusters.append({'Cluster ID': f"Unclustered-{sid}", 'Type': 'Unclustered', 'Societies': [society], 'Orders': society['Orders'], 'Distance': distance, 'Path': path, 'Cost': 0})
-        unprocessed_ids -= {s['Society ID'] for s in df[df['Hub ID'] == hub_id].to_dict('records')}
+            # Add Hub Name here as well
+            all_clusters.append({'Cluster ID': f"Unclustered-{sid}", 'Type': 'Unclustered', 'Societies': [society], 'Orders': society['Orders'], 'Distance': distance, 'Path': path, 'Cost': 0, 'Hub Name': hub_name})
+        unprocessed_ids -= {s['Society ID'] for s in df[df['Hub Name'] == hub_name].to_dict('records')}
     return all_clusters
 
 def create_summary_df(clusters, depot_coord, circuity_factor):
@@ -162,32 +166,21 @@ st.markdown("<div style='text-align: center;'><h1> 🚚 RK - Delivery Cluster Op
 
 with st.sidebar:
     st.header("1. Depot Settings")
-
     def update_depot_from_selection():
         city = st.session_state.city_selector
         if city != "Custom":
             st.session_state.depot_lat = PREDEFINED_DEPOTS[city]["lat"]
             st.session_state.depot_lon = PREDEFINED_DEPOTS[city]["lon"]
-
     if "depot_lat" not in st.session_state:
         first_city = list(PREDEFINED_DEPOTS.keys())[0]
         st.session_state.depot_lat = PREDEFINED_DEPOTS[first_city]["lat"]
         st.session_state.depot_lon = PREDEFINED_DEPOTS[first_city]["lon"]
-        # Set the default city selector state as well
         if "city_selector" not in st.session_state:
             st.session_state.city_selector = first_city
-
-    st.selectbox(
-        "Select a Predefined Depot",
-        options=list(PREDEFINED_DEPOTS.keys()) + ["Custom"],
-        key="city_selector",
-        on_change=update_depot_from_selection,
-    )
-
+    st.selectbox("Select a Predefined Depot", options=list(PREDEFINED_DEPOTS.keys()) + ["Custom"], key="city_selector", on_change=update_depot_from_selection)
     depot_lat = st.number_input("Depot Latitude", key="depot_lat", format="%.6f")
     depot_long = st.number_input("Depot Longitude", key="depot_lon", format="%.6f")
     st.caption("Select a depot to pre-fill coordinates, or choose 'Custom' and edit them manually.")
-    
     depot_coord = (depot_lat, depot_long)
 
     st.header("2. Routing & Cost Settings")
@@ -198,7 +191,8 @@ with st.sidebar:
              'micro': st.number_input("Micro Cluster Van Cost (₹)", 500) + st.number_input("Micro Cluster CEE Cost (₹)", 200)}
 
     st.header("3. Upload Data")
-    template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID'])
+    # CHANGED: Template now includes Hub Name
+    template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub Name'])
     template_csv = template_df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Template CSV", template_csv, 'input_template.csv', 'text/csv')
     file = st.file_uploader("Upload Society Data CSV", type=["csv"])
@@ -214,61 +208,75 @@ except Exception as e:
 
 if 'clusters' not in st.session_state:
     st.session_state.clusters = None
-    st.session_state.last_run_depot_coord = None # Initialize
+    st.session_state.last_run_depot_coord = None
 
 if st.button("🚀 Generate Clusters", type="primary"):
     with st.spinner("Analyzing data and forming clusters..."):
         st.session_state.clusters = run_clustering(df_raw, depot_lat, depot_long, costs, circuity_factor)
-        # --- NEW: Store the coordinates used for this run ---
         st.session_state.last_run_depot_coord = depot_coord
 
-# --- NEW: Check for stale data before displaying results ---
 if st.session_state.get('clusters') is not None:
-    # Check if the current depot settings match the settings used for the last run
     if st.session_state.last_run_depot_coord != depot_coord:
         st.warning("Depot settings have changed. The displayed results are for the previous location. Please click 'Generate Clusters' to update.")
     
-    # The results are still displayed, but with a clear warning if they are stale
     with st.container():
-        clusters = st.session_state.clusters
+        all_clusters = st.session_state.clusters
         
-        summary_df = create_summary_df(clusters, depot_coord, circuity_factor) 
-        st.header("📊 Cluster Summary")
-        column_order = ['Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence']
-        st.dataframe(summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
-        csv_buffer = BytesIO(); summary_df[column_order].to_csv(csv_buffer, index=False, encoding='utf-8')
-        st.download_button("Download Full Summary (CSV)", csv_buffer.getvalue(), "cluster_summary.csv", "text/csv")
+        # CHANGED: Filter by Hub Name
+        hub_names = ['All Hubs'] + sorted(df_raw['Hub Name'].unique().tolist())
+        selected_hub = st.selectbox("Filter by Hub Name", options=hub_names)
+        
+        if selected_hub != "All Hubs":
+            filtered_clusters = [c for c in all_clusters if c.get('Hub Name') == selected_hub]
+        else:
+            filtered_clusters = all_clusters
+            
+        st.divider()
 
-        st.header("📈 Cumulative Summary by Cluster Type")
-        temp_df = summary_df.copy()
-        temp_df['Total Cost'] = temp_df['CPO (in Rs.)'] * temp_df['Total Orders']
-        cumulative_summary = temp_df.groupby('Cluster Type').agg(
-            Total_Routes=('Cluster ID', 'count'), Total_Societies=('No. of Societies', 'sum'),
-            Total_Orders=('Total Orders', 'sum'), Total_Cost=('Total Cost', 'sum')).reset_index()
-        cumulative_summary['Overall CPO (in Rs.)'] = (cumulative_summary['Total_Cost'] / cumulative_summary['Total_Orders']).round(2)
-        st.dataframe(cumulative_summary[['Cluster Type', 'Total_Routes', 'Total_Societies', 'Total_Orders', 'Overall CPO (in Rs.)']])
+        if not filtered_clusters:
+            st.warning(f"No clusters found for Hub Name: {selected_hub}")
+        else:
+            summary_df = create_summary_df(filtered_clusters, depot_coord, circuity_factor) 
+            st.header("📊 Cluster Summary")
+            column_order = ['Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence']
+            st.dataframe(summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
+            csv_buffer = BytesIO(); summary_df[column_order].to_csv(csv_buffer, index=False, encoding='utf-8')
+            st.download_button("Download Full Summary (CSV)", csv_buffer.getvalue(), "cluster_summary.csv", "text/csv")
 
-        st.header("🗺️ Unified Map View")
-        st.info("You can toggle clusters on/off using the layer control icon in the top-right of the map.")
-        map_data = st_folium(create_unified_map(clusters, depot_coord, circuity_factor), width=1200, height=600, returned_objects=[])
+            st.header("📈 Cumulative Summary by Cluster Type")
+            temp_df = summary_df.copy()
+            temp_df['Total Cost'] = temp_df['CPO (in Rs.)'] * temp_df['Total Orders']
+            cumulative_summary = temp_df.groupby('Cluster Type').agg(
+                Total_Routes=('Cluster ID', 'count'), Total_Societies=('No. of Societies', 'sum'),
+                Total_Orders=('Total Orders', 'sum'), Total_Cost=('Total Cost', 'sum')).reset_index()
+            cumulative_summary['Overall CPO (in Rs.)'] = (cumulative_summary['Total_Cost'] / cumulative_summary['Total_Orders']).round(2)
+            st.dataframe(cumulative_summary[['Cluster Type', 'Total_Routes', 'Total_Societies', 'Total_Orders', 'Overall CPO (in Rs.)']])
 
-        st.header("🔍 Individual Cluster Details")
-        cluster_id_to_show = st.selectbox("Select a Cluster to Inspect", sorted(summary_df['Cluster ID'].tolist()))
-        selected_cluster = next((c for c in clusters if c['Cluster ID'] == cluster_id_to_show), None)
+            st.header("🗺️ Unified Map View")
+            st.info("You can toggle clusters on/off using the layer control icon in the top-right of the map.")
+            map_data = st_folium(create_unified_map(filtered_clusters, depot_coord, circuity_factor), width=1200, height=600, returned_objects=[])
 
-        if selected_cluster:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader(f"Details for {selected_cluster['Cluster ID']}")
-                cluster_details_df = pd.DataFrame(selected_cluster['Societies'])
-                cluster_orders = selected_cluster['Orders']
-                cluster_cost = selected_cluster['Cost']
-                cluster_cpo = (cluster_cost / cluster_orders) if cluster_orders > 0 else 0
-                cluster_details_df['CPO (in Rs.)'] = round(cluster_cpo, 2)
-                cluster_details_df.rename(columns={'Orders': 'Total Orders'}, inplace=True)
-                st.dataframe(cluster_details_df[['Society ID', 'Society Name', 'Total Orders', 'CPO (in Rs.)']])
-                detail_csv_buffer = BytesIO(); cluster_details_df.to_csv(detail_csv_buffer, index=False, encoding='utf-8')
-                st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
-            with col2:
-                st.subheader("Route Map")
-                _ = st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_ant_path=True), width=600, height=400, returned_objects=[])
+            st.header("🔍 Individual Cluster Details")
+            cluster_id_options = sorted(summary_df['Cluster ID'].tolist())
+            if not cluster_id_options:
+                st.write("No individual clusters to select for this hub.")
+            else:
+                cluster_id_to_show = st.selectbox("Select a Cluster to Inspect", cluster_id_options)
+                selected_cluster = next((c for c in filtered_clusters if c['Cluster ID'] == cluster_id_to_show), None)
+
+                if selected_cluster:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.subheader(f"Details for {selected_cluster['Cluster ID']}")
+                        cluster_details_df = pd.DataFrame(selected_cluster['Societies'])
+                        cluster_orders = selected_cluster['Orders']
+                        cluster_cost = selected_cluster['Cost']
+                        cluster_cpo = (cluster_cost / cluster_orders) if cluster_orders > 0 else 0
+                        cluster_details_df['CPO (in Rs.)'] = round(cluster_cpo, 2)
+                        cluster_details_df.rename(columns={'Orders': 'Total Orders'}, inplace=True)
+                        st.dataframe(cluster_details_df[['Society ID', 'Society Name', 'Total Orders', 'CPO (in Rs.)']])
+                        detail_csv_buffer = BytesIO(); cluster_details_df.to_csv(detail_csv_buffer, index=False, encoding='utf-8')
+                        st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
+                    with col2:
+                        st.subheader("Route Map")
+                        _ = st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_ant_path=True), width=600, height=400, returned_objects=[])
