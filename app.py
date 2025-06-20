@@ -50,7 +50,6 @@ def get_delivery_sequence(points, depot_coord, circuity_factor):
     point_coords = {p['Society ID']: (p['Latitude'], p['Longitude']) for p in points}
     
     if len(points) == 1:
-        # Simple case for single-point clusters
         point_id = list(point_coords.keys())[0]
         dist = calculate_route_distance(depot_coord, point_coords[point_id], circuity_factor) * 2
         return [point_id], round(dist, 2)
@@ -58,35 +57,36 @@ def get_delivery_sequence(points, depot_coord, circuity_factor):
     best_path = []
     best_distance = float('inf')
 
-    # Iterate through each point, treating it as a potential starting point
     for start_node_id in point_coords.keys():
-        # Start a new trial path
         current_path = [start_node_id]
         unvisited_ids = set(point_coords.keys()) - {start_node_id}
         current_distance = calculate_route_distance(depot_coord, point_coords[start_node_id], circuity_factor)
         current_point_id = start_node_id
 
-        # Complete the rest of the path using the simple Nearest Neighbor heuristic
         while unvisited_ids:
             current_coord = point_coords[current_point_id]
-            # Find the nearest neighbor from the remaining unvisited points
-            nearest_neighbor_id = min(unvisited_ids, key=lambda pid: haversine(current_coord, point_coords[pid]))
+            
+            # --- THE FIX IS HERE ---
+            # The decision of which point is "nearest" MUST use the same circuity factor
+            # to match the final route calculation.
+            nearest_neighbor_id = min(
+                unvisited_ids, 
+                key=lambda pid: calculate_route_distance(current_coord, point_coords[pid], circuity_factor)
+            )
+            # --- END OF FIX ---
             
             current_distance += calculate_route_distance(current_coord, point_coords[nearest_neighbor_id], circuity_factor)
             current_path.append(nearest_neighbor_id)
             unvisited_ids.remove(nearest_neighbor_id)
             current_point_id = nearest_neighbor_id
         
-        # Add the final leg back to the depot
         current_distance += calculate_route_distance(point_coords[current_point_id], depot_coord, circuity_factor)
 
-        # If this trial path is the best one so far, save it
         if current_distance < best_distance:
             best_distance = current_distance
             best_path = current_path
             
     return best_path, round(best_distance, 2)
-
 
 def get_distance_to_last_society(points, depot_coord, circuity_factor):
     """Calculates depot-to-last-society distance using the circuity factor."""
