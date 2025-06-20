@@ -23,7 +23,6 @@ PREDEFINED_DEPOTS = {
 }
 
 # --- UTILITY & ALGORITHM FUNCTIONS ---
-# (These functions are correct and remain unchanged)
 
 def validate_columns(df):
     """Validate if the dataframe contains all required columns and correct data types."""
@@ -42,18 +41,52 @@ def calculate_route_distance(coord1, coord2, circuity_factor):
     return haversine(coord1, coord2) * circuity_factor
 
 def get_delivery_sequence(points, depot_coord, circuity_factor):
-    """Calculates the delivery sequence and total distance, using the circuity factor."""
+    """
+    Calculates the delivery sequence and total distance using a more robust
+    "Repetitive Nearest Neighbor" algorithm.
+    """
     if not points: return [], 0.0
+    
     point_coords = {p['Society ID']: (p['Latitude'], p['Longitude']) for p in points}
-    current_coord, unvisited_ids, path, total_distance = depot_coord, set(point_coords.keys()), [], 0.0
-    while unvisited_ids:
-        nearest_id = min(unvisited_ids, key=lambda pid: haversine(current_coord, point_coords[pid]))
-        total_distance += calculate_route_distance(current_coord, point_coords[nearest_id], circuity_factor)
-        current_coord = point_coords[nearest_id]
-        path.append(nearest_id)
-        unvisited_ids.remove(nearest_id)
-    total_distance += calculate_route_distance(current_coord, depot_coord, circuity_factor)
-    return path, round(total_distance, 2)
+    
+    if len(points) == 1:
+        # Simple case for single-point clusters
+        point_id = list(point_coords.keys())[0]
+        dist = calculate_route_distance(depot_coord, point_coords[point_id], circuity_factor) * 2
+        return [point_id], round(dist, 2)
+
+    best_path = []
+    best_distance = float('inf')
+
+    # Iterate through each point, treating it as a potential starting point
+    for start_node_id in point_coords.keys():
+        # Start a new trial path
+        current_path = [start_node_id]
+        unvisited_ids = set(point_coords.keys()) - {start_node_id}
+        current_distance = calculate_route_distance(depot_coord, point_coords[start_node_id], circuity_factor)
+        current_point_id = start_node_id
+
+        # Complete the rest of the path using the simple Nearest Neighbor heuristic
+        while unvisited_ids:
+            current_coord = point_coords[current_point_id]
+            # Find the nearest neighbor from the remaining unvisited points
+            nearest_neighbor_id = min(unvisited_ids, key=lambda pid: haversine(current_coord, point_coords[pid]))
+            
+            current_distance += calculate_route_distance(current_coord, point_coords[nearest_neighbor_id], circuity_factor)
+            current_path.append(nearest_neighbor_id)
+            unvisited_ids.remove(nearest_neighbor_id)
+            current_point_id = nearest_neighbor_id
+        
+        # Add the final leg back to the depot
+        current_distance += calculate_route_distance(point_coords[current_point_id], depot_coord, circuity_factor)
+
+        # If this trial path is the best one so far, save it
+        if current_distance < best_distance:
+            best_distance = current_distance
+            best_path = current_path
+            
+    return best_path, round(best_distance, 2)
+
 
 def get_distance_to_last_society(points, depot_coord, circuity_factor):
     """Calculates depot-to-last-society distance using the circuity factor."""
@@ -190,26 +223,17 @@ with st.sidebar:
     st.header("2. Routing & Cost Settings")
     circuity_factor = st.slider("Circuity Factor (for driving distance estimation)", 1.0, 2.0, 1.4, 0.1, help="Adjust to estimate driving distance from straight-line distance. 1.4 = 40% longer.")
     
-    # --- THE FIX IS HERE ---
     st.subheader("Main (180 to 220) Costs")
     main_van_cost = st.number_input("Main Van Cost (₹)", value=833, min_value=0, key="main_van")
     main_cee_cost = st.number_input("Main CEE Cost (₹)", value=333, min_value=0, key="main_cee")
-
     st.subheader("Mini (121 to 179) Costs")
     mini_van_cost = st.number_input("Mini Van Cost (₹)", value=1000, min_value=0, key="mini_van")
     mini_cee_cost = st.number_input("Mini CEE Cost (₹)", value=200, min_value=0, key="mini_cee")
-
     st.subheader("Micro (1 to 120) Costs")
     micro_van_cost = st.number_input("Micro Van Cost (₹)", value=500, min_value=0, key="micro_van")
     micro_cee_cost = st.number_input("Micro CEE Cost (₹)", value=200, min_value=0, key="micro_cee")
+    costs = {'main': main_van_cost + main_cee_cost, 'mini': mini_van_cost + mini_cee_cost, 'micro': micro_van_cost + micro_cee_cost}
 
-    costs = {
-        'main': main_van_cost + main_cee_cost,
-        'mini': mini_van_cost + mini_cee_cost,
-        'micro': micro_van_cost + micro_cee_cost
-    }
-    # --- END OF FIX ---
-    
     st.header("3. Upload Data")
     template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name'])
     template_csv = template_df.to_csv(index=False).encode('utf-8')
