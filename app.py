@@ -190,10 +190,26 @@ with st.sidebar:
     st.header("2. Routing & Cost Settings")
     circuity_factor = st.slider("Circuity Factor (for driving distance estimation)", 1.0, 2.0, 1.4, 0.1, help="Adjust to estimate driving distance from straight-line distance. 1.4 = 40% longer.")
     
-    costs = {'main': st.number_input("Main Cluster Van Cost (₹)", 833) + st.number_input("Main Cluster CEE Cost (₹)", 333),
-             'mini': st.number_input("Mini Cluster Van Cost (₹)", 1000) + st.number_input("Mini Cluster CEE Cost (₹)", 200),
-             'micro': st.number_input("Micro Cluster Van Cost (₹)", 500) + st.number_input("Micro Cluster CEE Cost (₹)", 200)}
+    # --- THE FIX IS HERE ---
+    st.subheader("Main (180 to 220) Costs")
+    main_van_cost = st.number_input("Main Van Cost (₹)", value=833, min_value=0, key="main_van")
+    main_cee_cost = st.number_input("Main CEE Cost (₹)", value=333, min_value=0, key="main_cee")
 
+    st.subheader("Mini (121 to 179) Costs")
+    mini_van_cost = st.number_input("Mini Van Cost (₹)", value=1000, min_value=0, key="mini_van")
+    mini_cee_cost = st.number_input("Mini CEE Cost (₹)", value=200, min_value=0, key="mini_cee")
+
+    st.subheader("Micro (1 to 120) Costs")
+    micro_van_cost = st.number_input("Micro Van Cost (₹)", value=500, min_value=0, key="micro_van")
+    micro_cee_cost = st.number_input("Micro CEE Cost (₹)", value=200, min_value=0, key="micro_cee")
+
+    costs = {
+        'main': main_van_cost + main_cee_cost,
+        'mini': mini_van_cost + mini_cee_cost,
+        'micro': micro_van_cost + micro_cee_cost
+    }
+    # --- END OF FIX ---
+    
     st.header("3. Upload Data")
     template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name'])
     template_csv = template_df.to_csv(index=False).encode('utf-8')
@@ -267,21 +283,13 @@ if st.session_state.get('clusters') is not None:
                 col1, col2 = st.columns(2)
                 with col1:
                     st.subheader(f"Details for {selected_cluster['Cluster ID']}")
-                    
-                    # --- THE FIX IS HERE ---
-                    # Create the original DataFrame of societies
                     cluster_details_df_unsorted = pd.DataFrame(selected_cluster['Societies'])
-                    
-                    # Get the delivery sequence
                     delivery_path = selected_cluster['Path']
-                    
-                    # Re-order the DataFrame to match the delivery sequence
-                    cluster_details_df_unsorted.set_index('Society ID', inplace=True)
-                    # The .loc indexer ensures the order is correct.
-                    # We drop rows with IDs not in the path, which handles single-society clusters cleanly.
-                    cluster_details_df = cluster_details_df_unsorted.loc[delivery_path].reset_index()
-                    
-                    # Calculate CPO and add the column
+                    if delivery_path:
+                        cluster_details_df_unsorted.set_index('Society ID', inplace=True)
+                        cluster_details_df = cluster_details_df_unsorted.loc[delivery_path].reset_index()
+                    else:
+                        cluster_details_df = cluster_details_df_unsorted
                     cluster_orders = selected_cluster['Orders']
                     cluster_cost = selected_cluster['Cost']
                     cluster_cpo = (cluster_cost / cluster_orders) if cluster_orders > 0 else 0
@@ -291,11 +299,8 @@ if st.session_state.get('clusters') is not None:
                     detail_cols = ['Society ID', 'Society Name', 'Hub ID', 'Hub Name', 'Total Orders', 'CPO (in Rs.)']
                     st.dataframe(cluster_details_df[detail_cols])
                     
-                    detail_csv_buffer = BytesIO()
-                    # The downloaded CSV will now be in the correct sequence
-                    cluster_details_df[detail_cols].to_csv(detail_csv_buffer, index=False, encoding='utf-8')
+                    detail_csv_buffer = BytesIO(); cluster_details_df[detail_cols].to_csv(detail_csv_buffer, index=False, encoding='utf-8')
                     st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", detail_csv_buffer.getvalue(), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
-                    # --- END OF FIX ---
                 with col2:
                     st.subheader("Route Map")
                     _ = st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_ant_path=True), width=600, height=400, returned_objects=[])
