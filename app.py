@@ -81,6 +81,7 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
     societies_map = {s['Society ID']: s for s in df.to_dict('records')}
     unprocessed_ids = set(societies_map.keys())
     depot_coord = (depot_lat, depot_lon)
+    st.write("Costs Dictionary (inside run_clustering):", costs)  # Debug: Check costs here
     for hub_name in df['Hub Name'].unique():
         hub_society_ids = {sid for sid in unprocessed_ids if societies_map[sid]['Hub Name'] == hub_name}
         for cluster_type in ['Main', 'Mini', 'Micro']:
@@ -109,6 +110,7 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
                     # **Cost Calculation based on cluster_type**
                     cluster_type_lower = cluster_type.lower()  # Correctly convert to lowercase
                     cost = costs.get(cluster_type_lower, 0)  # Use .get() to handle missing keys gracefully
+                    st.write(f"Cluster Type: {cluster_type}, Cost: {cost}") # Check cost assignment
                     all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': cost, 'Hub Name': hub_name})  # Include the cost
                     cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
             for sid in hub_society_ids:
@@ -154,7 +156,7 @@ def create_summary_df(clusters, depot_coord, circuity_factor, df):
                     else:
                         sequence_parts.append(f"{society_name} (Blocks: {blocks})")
                 delivery_sequence_str = "".join(sequence_parts)
-        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str, 'Total Blocks': sum(int(society_id_to_blocks.get(sid, 0)) for sid in c['Path'] if society_id_to_blocks.get(sid, 0) != 'N/A')})
+        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str, 'Total Blocks': sum(int(society_id_to_blocks.get(sid, 0)) for sid in c['Path'] if society_id_to_blocks.get(sid, 0) != 'N/A'), 'Total Cost': c.get('Cost',0) * c.get('Orders', 0)})
     return pd.DataFrame(summary_rows)
 
 def create_unified_map(clusters, depot_coord, circuity_factor, use_ant_path=False):
