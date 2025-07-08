@@ -249,10 +249,9 @@ if st.session_state.get('clusters') is not None:
         st.header("📈 Overall Cumulative Summary")
         temp_df_all = full_summary_df.copy()
         # Aggregate Number of Blocks in Cumulative Summary
-        # Correctly parse the delivery sequence string and sum the blocks
         def extract_blocks(delivery_sequence):
             total_blocks = 0
-            if isinstance(delivery_sequence, str): # Check if delivery_sequence is a string
+            if isinstance(delivery_sequence, str):
                 for part in delivery_sequence.split(' '):
                     if 'Blocks' in part:
                         try:
@@ -279,28 +278,24 @@ if st.session_state.get('clusters') is not None:
         hub_names = ['All Hubs'] + sorted(df_raw['Hub Name'].unique().tolist())
         selected_hub = st.selectbox("Filter by Hub Name to Drill Down", options=hub_names)
         clusters_for_drilldown = [c for c in all_clusters if c.get('Hub Name') == selected_hub] if selected_hub != "All Hubs" else all_clusters
-        cluster_id_options = sorted([c['Cluster ID'] for c in clusters_for_drilldown])
-        if not cluster_id_options:
-            st.warning("No individual clusters to select for this hub.")
-        else:
-            cluster_id_to_show = st.selectbox("Select a Cluster to Inspect", cluster_id_options)
-            selected_cluster = next((c for c in clusters_for_drilldown if c['Cluster ID'] == cluster_id_to_show), None)
-            if selected_cluster:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.subheader(f"Details for {selected_cluster['Cluster ID']}")
-                    cluster_details_df_unsorted = pd.DataFrame(selected_cluster['Societies'])
-                    delivery_path = selected_cluster['Path']
-                    cluster_details_df = cluster_details_df_unsorted.loc[cluster_details_df_unsorted['Society ID'].isin(delivery_path)].set_index('Society ID').loc[delivery_path].reset_index() if delivery_path else cluster_details_df_unsorted
-                    cluster_orders, cluster_cost = selected_cluster['Orders'], selected_cluster['Cost']
-                    cluster_cpo = (cluster_cost / cluster_orders) if cluster_orders > 0 else 0
-                    cluster_details_df['CPO (in Rs.)'] = round(cluster_cpo, 2)
-                    cluster_details_df.rename(columns={'Orders': 'Total Orders'}, inplace=True)
-                    detail_cols = ['Society ID', 'Society Name', 'Hub ID', 'Hub Name', 'Total Orders', 'CPO (in Rs.)', 'Number of Blocks'] #Added
-                    # Include Number of Blocks in the displayed columns
-                    cluster_details_df = pd.merge(cluster_details_df, df_raw[['Society ID', 'Number of Blocks']], on='Society ID', how='left')
-                    st.dataframe(cluster_details_df[detail_cols])
-                    st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", cluster_details_df[detail_cols].to_csv(index=False).encode('utf-8'), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
-                with col2:
-                    st.subheader("Route Map")
-                    st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_ant_path=True), width=600, height=400, returned_objects=[])
+        cluster_id_to_show = st.selectbox("Select a Cluster to Inspect", [c['Cluster ID'] for c in clusters_for_drilldown])
+        selected_cluster = next((c for c in clusters_for_drilldown if c['Cluster ID'] == cluster_id_to_show), None)
+        if selected_cluster:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader(f"Details for {selected_cluster['Cluster ID']}")
+                cluster_details_df_unsorted = pd.DataFrame(selected_cluster['Societies'])
+                delivery_path = selected_cluster['Path']
+                cluster_details_df = cluster_details_df_unsorted.loc[cluster_details_df_unsorted['Society ID'].isin(delivery_path)].set_index('Society ID').loc[delivery_path].reset_index() if delivery_path else cluster_details_df_unsorted
+                cluster_orders, cluster_cost = selected_cluster['Orders'], selected_cluster['Cost']
+                cluster_cpo = (cluster_cost / cluster_orders) if cluster_orders > 0 else 0
+                cluster_details_df['CPO (in Rs.)'] = round(cluster_cpo, 2)
+                cluster_details_df.rename(columns={'Orders': 'Total Orders'}, inplace=True)
+                detail_cols = ['Society ID', 'Society Name', 'Hub ID', 'Hub Name', 'Total Orders', 'CPO (in Rs.)', 'Number of Blocks'] #Added
+                # Include Number of Blocks in the displayed columns
+                cluster_details_df = pd.merge(cluster_details_df, df_raw[['Society ID', 'Number of Blocks']], on='Society ID', how='left')
+                st.dataframe(cluster_details_df[detail_cols])
+                st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", cluster_details_df[detail_cols].to_csv(index=False).encode('utf-8'), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
+            with col2:
+                st.subheader("Route Map")
+                st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_ant_path=True), width=600, height=400, returned_objects=[])
