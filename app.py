@@ -27,14 +27,14 @@ PREDEFINED_DEPOTS = {
 
 def validate_columns(df):
     """Validate if the dataframe contains all required columns and correct data types."""
-    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name'}
+    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name', 'Number of Blocks'} # Added block column
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         return f"File is missing required columns: {', '.join(missing_cols)}"
-    for col in ['Latitude', 'Longitude', 'Orders', 'Hub ID']:
+    for col in ['Latitude', 'Longitude', 'Orders', 'Hub ID', 'Number of Blocks']:  #Also validate the blocks
         df[col] = pd.to_numeric(df[col], errors='coerce')
     if df.isnull().values.any():
-        return "File contains non-numeric or empty values in required numeric columns (Lat, Lon, Orders, Hub ID). Please check."
+        return "File contains non-numeric or empty values in required numeric columns (Lat, Lon, Orders, Hub ID, Number of Blocks). Please check." #Update message
     return None
 
 def calculate_route_distance(coord1, coord2, circuity_factor):
@@ -85,7 +85,8 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
     for hub_name in df['Hub Name'].unique():
         hub_society_ids = {sid for sid in unprocessed_ids if societies_map[sid]['Hub Name'] == hub_name}
         for cluster_type in ['Main', 'Mini', 'Micro']:
-            sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: societies_map[sid]['Orders'], reverse=True)
+            # **Sort by Orders, then Number of Blocks (ascending)**
+            sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: (societies_map[sid]['Orders'], societies_map[sid]['Number of Blocks']), reverse=True) # Less blocks first - also include order for priority
             for seed_id in sorted_seeds:
                 if seed_id not in hub_society_ids: continue
                 seed = societies_map[seed_id]
@@ -96,7 +97,8 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
                 else: # Micro
                     max_orders = 120
                     neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id]
-                for neighbor in sorted(neighbors, key=lambda s: s['Orders'], reverse=True):
+                # **Sort by Orders, then Number of Blocks (ascending)**
+                for neighbor in sorted(neighbors, key=lambda s: (s['Orders'], s['Number of Blocks']), reverse=True):
                     if potential_orders + neighbor['Orders'] <= max_orders:
                         potential_cluster.append(neighbor); potential_orders += neighbor['Orders']
                 valid = False
@@ -124,7 +126,7 @@ def create_summary_df(clusters, depot_coord, circuity_factor):
         if c['Path'] and len(c['Path']) > 0:
             total_distance = c['Distance']
             first_stop_coord = id_to_coord[c['Path'][0]]
-            last_stop_coord = id_to_coord[c['Path'][-1]]
+            last_stop_coord = id_to_coord[c['Path'][-1']]
             dist_depot_to_first = calculate_route_distance(depot_coord, first_stop_coord, circuity_factor)
             dist_last_to_depot = calculate_route_distance(last_stop_coord, depot_coord, circuity_factor)
             internal_distance = total_distance - dist_depot_to_first - dist_last_to_depot
@@ -201,23 +203,25 @@ with st.sidebar:
     micro_van_cost, micro_cee_cost = st.number_input("Micro Van Cost (₹)", value=500, min_value=0, key="micro_van"), st.number_input("Micro CEE Cost (₹)", value=200, min_value=0, key="micro_cee")
     costs = {'main': main_van_cost + main_cee_cost, 'mini': mini_van_cost + mini_cee_cost, 'micro': micro_van_cost + micro_cee_cost}
     st.header("3. Upload Data")
-    template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name'])
+    template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name', 'Number of Blocks']) #Added block column
     st.download_button("Download Template CSV", template_df.to_csv(index=False).encode('utf-8'), 'input_template.csv', 'text/csv')
     file = st.file_uploader("Upload Society Data CSV", type=["csv"])
 
 if file is None:
     st.info("Please upload a society data file to begin analysis."); st.stop()
 try:
-    # --- THE FIX IS HERE ---
-    try:
-        df_raw = pd.read_csv(file, encoding='utf-8')
-    except UnicodeDecodeError:
-        st.warning("UTF-8 decoding failed. Trying a different encoding (latin-1).")
-        file.seek(0)
-        df_raw = pd.read_csv(file, encoding='latin-1')
-    # --- END OF FIX ---
+    df_raw = pd.read_csv(file, encoding='utf-8') # First attempt
     validation_error = validate_columns(df_raw)
     if validation_error: st.error(validation_error); st.stop()
+except UnicodeDecodeError:
+    st.warning("UTF-8 decoding failed. Trying a different encoding (latin-1).")
+    file.seek(0)  # Reset file pointer to the beginning
+    try:
+        df_raw = pd.read_csv(file, encoding='latin-1') # Fallback encoding
+        validation_error = validate_columns(df_raw)
+        if validation_error: st.error(validation_error); st.stop()
+    except Exception as e:
+        st.error(f"Error reading or parsing file with latin-1 encoding: {e}"); st.stop()
 except Exception as e:
     st.error(f"Error reading or parsing file: {e}"); st.stop()
 
@@ -234,7 +238,7 @@ if st.session_state.get('clusters') is not None:
         st.warning("Depot settings have changed. The displayed results are for the previous location. Please click 'Generate Clusters' to update.")
     with st.container():
         all_clusters = st.session_state.clusters
-        full_summary_df = create_summary_df(all_clusters, depot_coord, circuity_factor) 
+        full_summary_df = create_summary_df(all_clusters, depot_coord, circuity_factor)
         st.header("📊 Overall Cluster Summary")
         column_order = ['Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence']
         st.dataframe(full_summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
