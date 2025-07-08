@@ -249,7 +249,19 @@ if st.session_state.get('clusters') is not None:
         st.header("📈 Overall Cumulative Summary")
         temp_df_all = full_summary_df.copy()
         # Aggregate Number of Blocks in Cumulative Summary
-        temp_df_all['Total Blocks'] = temp_df_all['Delivery Sequence'].apply(lambda x: sum(int(s.split(': ')[1].replace(')', '')) for s in x.split(' ') if 'Blocks' in s and s.split(': ')[1].replace(')', '').isdigit()))
+        # Correctly parse the delivery sequence string and sum the blocks
+        def extract_blocks(delivery_sequence):
+            total_blocks = 0
+            if isinstance(delivery_sequence, str): # Check if delivery_sequence is a string
+                for part in delivery_sequence.split(' '):
+                    if 'Blocks' in part:
+                        try:
+                            total_blocks += int(part.split(': ')[1].replace(')', ''))
+                        except (IndexError, ValueError):
+                            pass  # Handle potential parsing errors
+            return total_blocks
+
+        temp_df_all['Total Blocks'] = temp_df_all['Delivery Sequence'].apply(extract_blocks)
         cumulative_summary_all = temp_df_all.groupby('Cluster Type').agg(
             Total_Routes=('Cluster ID', 'count'),
             Total_Societies=('No. of Societies', 'sum'),
