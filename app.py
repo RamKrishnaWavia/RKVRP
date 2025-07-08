@@ -81,6 +81,7 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
     societies_map = {s['Society ID']: s for s in df.to_dict('records')}
     unprocessed_ids = set(societies_map.keys())
     depot_coord = (depot_lat, depot_lon)
+    st.write("Costs Dictionary (inside run_clustering):", costs)  # Debug: Check costs here
     for hub_name in df['Hub Name'].unique():
         hub_society_ids = {sid for sid in unprocessed_ids if societies_map[sid]['Hub Name'] == hub_name}
         for cluster_type in ['Main', 'Mini', 'Micro']:
@@ -109,7 +110,7 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
                     # **Cost Calculation based on cluster_type**
                     cluster_type_lower = cluster_type.lower()  # Correctly convert to lowercase
                     cost = costs.get(cluster_type_lower, 0)  # Use .get() to handle missing keys gracefully
-                    st.write(f"Cluster Type: {cluster_type}, Cost: {cost}") #Add this line
+                    st.write(f"Cluster Type: {cluster_type}, Cost: {cost}") # Check cost assignment
                     all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': cost, 'Hub Name': hub_name})  # Include the cost
                     cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
             for sid in hub_society_ids:
@@ -213,8 +214,7 @@ with st.sidebar:
     st.subheader("Micro (1 to 120) Costs")
     micro_van_cost, micro_cee_cost = st.number_input("Micro Van Cost (₹)", value=500, min_value=0, key="micro_van"), st.number_input("Micro CEE Cost (₹)", value=200, min_value=0, key="micro_cee")
     costs = {'main': main_van_cost + main_cee_cost, 'mini': mini_van_cost + mini_cee_cost, 'micro': micro_van_cost + micro_cee_cost}
-    st.write("Costs Dictionary:", costs) #Debugging
-
+    st.write("Costs Dictionary (Sidebar):", costs)  # Debug: Check costs in sidebar.
     st.header("3. Upload Data")
     template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name', 'Number of Blocks']) #Added block column
     st.download_button("Download Template CSV", template_df.to_csv(index=False).encode('utf-8'), 'input_template.csv', 'text/csv')
