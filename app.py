@@ -23,18 +23,17 @@ PREDEFINED_DEPOTS = {
 }
 
 # --- UTILITY & ALGORITHM FUNCTIONS ---
-# (These functions are correct and remain unchanged)
 
 def validate_columns(df):
     """Validate if the dataframe contains all required columns and correct data types."""
-    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name', 'Number of Blocks'} # Added block column
+    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name', 'Number of Blocks'}
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         return f"File is missing required columns: {', '.join(missing_cols)}"
-    for col in ['Latitude', 'Longitude', 'Orders', 'Hub ID', 'Number of Blocks']:  #Also validate the blocks
+    for col in ['Latitude', 'Longitude', 'Orders', 'Hub ID', 'Number of Blocks']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     if df.isnull().values.any():
-        return "File contains non-numeric or empty values in required numeric columns (Lat, Lon, Orders, Hub ID, Number of Blocks). Please check." #Update message
+        return "File contains non-numeric or empty values in required numeric columns (Lat, Lon, Orders, Hub ID, Number of Blocks). Please check."
     return None
 
 def calculate_route_distance(coord1, coord2, circuity_factor):
@@ -86,7 +85,7 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
         hub_society_ids = {sid for sid in unprocessed_ids if societies_map[sid]['Hub Name'] == hub_name}
         for cluster_type in ['Main', 'Mini', 'Micro']:
             # **Sort by Orders, then Number of Blocks (ascending)**
-            sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: (societies_map[sid]['Orders'], societies_map[sid]['Number of Blocks']), reverse=True) # Less blocks first - also include order for priority
+            sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: (societies_map[sid]['Orders'], societies_map[sid]['Number of Blocks']), reverse=True)
             for seed_id in sorted_seeds:
                 if seed_id not in hub_society_ids: continue
                 seed = societies_map[seed_id]
@@ -109,11 +108,11 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
                     path, distance = get_delivery_sequence(potential_cluster, depot_coord, circuity_factor)
                     all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs[cluster_type.lower()], 'Hub Name': hub_name})
                     cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
-        for sid in hub_society_ids:
-            society = societies_map[sid]
-            path, distance = get_delivery_sequence([society], depot_coord, circuity_factor)
-            all_clusters.append({'Cluster ID': f"Unclustered-{sid}", 'Type': 'Unclustered', 'Societies': [society], 'Orders': society['Orders'], 'Distance': distance, 'Path': path, 'Cost': 0, 'Hub Name': hub_name})
-        unprocessed_ids -= {s['Society ID'] for s in df[df['Hub Name'] == hub_name].to_dict('records')}
+            for sid in hub_society_ids:
+                society = societies_map[sid]
+                path, distance = get_delivery_sequence([society], depot_coord, circuity_factor)
+                all_clusters.append({'Cluster ID': f"Unclustered-{sid}", 'Type': 'Unclustered', 'Societies': [society], 'Orders': society['Orders'], 'Distance': distance, 'Path': path, 'Cost': 0, 'Hub Name': hub_name})
+            unprocessed_ids -= {s['Society ID'] for s in df[df['Hub Name'] == hub_name].to_dict('records')}
     return all_clusters
 
 def create_summary_df(clusters, depot_coord, circuity_factor):
@@ -126,7 +125,7 @@ def create_summary_df(clusters, depot_coord, circuity_factor):
         if c['Path'] and len(c['Path']) > 0:
             total_distance = c['Distance']
             first_stop_coord = id_to_coord[c['Path'][0]]
-            last_stop_coord = id_to_coord[c['Path'][-1']]
+            last_stop_coord = id_to_coord[c['Path'][-1]]
             dist_depot_to_first = calculate_route_distance(depot_coord, first_stop_coord, circuity_factor)
             dist_last_to_depot = calculate_route_distance(last_stop_coord, depot_coord, circuity_factor)
             internal_distance = total_distance - dist_depot_to_first - dist_last_to_depot
@@ -140,7 +139,8 @@ def create_summary_df(clusters, depot_coord, circuity_factor):
                 sequence_parts = [first_society_name]
                 for i in range(1, len(c['Path'])):
                     start_coord, end_coord = id_to_coord[c['Path'][i-1]], id_to_coord[c['Path'][i]]
-                    end_name = id_to_name.get(c['Path'][i])
+                    end_name = id_to_name.get(c['Path'][i], "N/A")
+                    end_name = end_name.replace("'", "")  # Remove apostrophes to prevent formatting errors
                     dist = calculate_route_distance(start_coord, end_coord, circuity_factor)
                     sequence_parts.append(f" -> {end_name} ({dist:.2f} km)")
                 delivery_sequence_str = "".join(sequence_parts)
