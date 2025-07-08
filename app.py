@@ -156,7 +156,9 @@ def create_summary_df(clusters, depot_coord, circuity_factor, df):
                     else:
                         sequence_parts.append(f"{society_name} (Blocks: {blocks})")
                 delivery_sequence_str = "".join(sequence_parts)
-        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str, 'Total Blocks': sum(int(society_id_to_blocks.get(sid, 0)) for sid in c['Path'] if society_id_to_blocks.get(sid, 0) != 'N/A')})
+        # **Include Total Blocks in the summary rows**
+        total_blocks = sum(int(society_id_to_blocks.get(sid, 0)) for sid in c['Path'] if society_id_to_blocks.get(sid, 0) != 'N/A')
+        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str, 'Total Blocks': total_blocks})
     return pd.DataFrame(summary_rows)
 
 def create_unified_map(clusters, depot_coord, circuity_factor, use_ant_path=False):
