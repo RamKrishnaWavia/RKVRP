@@ -248,10 +248,17 @@ if st.session_state.get('clusters') is not None:
         st.download_button("Download Full Summary (CSV)", full_summary_df[column_order].to_csv(index=False).encode('utf-8'), "cluster_summary.csv", "text/csv")
         st.header("📈 Overall Cumulative Summary")
         temp_df_all = full_summary_df.copy()
-        temp_df_all['Total Cost'] = temp_df_all['CPO (in Rs.)'] * temp_df_all['Total Orders']
-        cumulative_summary_all = temp_df_all.groupby('Cluster Type').agg(Total_Routes=('Cluster ID', 'count'), Total_Societies=('No. of Societies', 'sum'), Total_Orders=('Total Orders', 'sum'), Total_Cost=('Total Cost', 'sum')).reset_index()
+        # Aggregate Number of Blocks in Cumulative Summary
+        temp_df_all['Total Blocks'] = temp_df_all['Delivery Sequence'].apply(lambda x: sum(int(s.split(': ')[1].replace(')', '')) for s in x.split(' ') if 'Blocks' in s and s.split(': ')[1].replace(')', '').isdigit()))
+        cumulative_summary_all = temp_df_all.groupby('Cluster Type').agg(
+            Total_Routes=('Cluster ID', 'count'),
+            Total_Societies=('No. of Societies', 'sum'),
+            Total_Orders=('Total Orders', 'sum'),
+            Total_Blocks=('Total Blocks', 'sum'),  # Include Total Blocks in aggregation
+            Total_Cost=('Total Cost', 'sum')
+        ).reset_index()
         cumulative_summary_all['Overall CPO (in Rs.)'] = (cumulative_summary_all['Total_Cost'] / cumulative_summary_all['Total_Orders']).round(2)
-        st.dataframe(cumulative_summary_all[['Cluster Type', 'Total_Routes', 'Total_Societies', 'Total_Orders', 'Overall CPO (in Rs.)']])
+        st.dataframe(cumulative_summary_all[['Cluster Type', 'Total_Routes', 'Total_Societies', 'Total_Orders', 'Total_Blocks', 'Overall CPO (in Rs.)']]) # Added the no of blocks
         st.header("🗺️ Unified Map View")
         st.info("You can toggle clusters on/off using the layer control icon in the top-right of the map.")
         st_folium(create_unified_map(all_clusters, depot_coord, circuity_factor), width=1200, height=600, returned_objects=[])
