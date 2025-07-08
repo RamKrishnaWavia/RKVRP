@@ -115,9 +115,10 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
             unprocessed_ids -= {s['Society ID'] for s in df[df['Hub Name'] == hub_name].to_dict('records')}
     return all_clusters
 
-def create_summary_df(clusters, depot_coord, circuity_factor):
-    """Creates summary DataFrame, with the delivery sequence showing only societies."""
+def create_summary_df(clusters, depot_coord, circuity_factor, df):
+    """Creates summary DataFrame, with the delivery sequence showing only societies and blocks."""
     summary_rows = []
+    society_id_to_blocks = df.set_index('Society ID')['Number of Blocks'].to_dict()
     for c in clusters:
         total_orders, cpo = c['Orders'], (c['Cost'] / c['Orders']) if c['Orders'] > 0 else 0
         id_to_name, id_to_coord = {s['Society ID']: s['Society Name'] for s in c['Societies']}, {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
@@ -133,16 +134,18 @@ def create_summary_df(clusters, depot_coord, circuity_factor):
         delivery_sequence_str = ""
         if c['Path']:
             if len(c['Path']) == 1:
-                delivery_sequence_str = id_to_name.get(c['Path'][0], "N/A")
+                delivery_sequence_str = f"{id_to_name.get(c['Path'][0], 'N/A')} (Blocks: {society_id_to_blocks.get(c['Path'][0], 'N/A')})"
             else:
-                first_society_name = id_to_name.get(c['Path'][0], "N/A")
-                sequence_parts = [first_society_name]
-                for i in range(1, len(c['Path'])):
-                    start_coord, end_coord = id_to_coord[c['Path'][i-1]], id_to_coord[c['Path'][i]]
-                    end_name = id_to_name.get(c['Path'][i], "N/A")
-                    end_name = end_name.replace("'", "")  # Remove apostrophes to prevent formatting errors
-                    dist = calculate_route_distance(start_coord, end_coord, circuity_factor)
-                    sequence_parts.append(f" -> {end_name} ({dist:.2f} km)")
+                sequence_parts = []
+                for i, society_id in enumerate(c['Path']):
+                    society_name = id_to_name.get(society_id, "N/A")
+                    blocks = society_id_to_blocks.get(society_id, "N/A")
+                    if i > 0:
+                         start_coord, end_coord = id_to_coord[c['Path'][i-1]], id_to_coord[c['Path'][i]]
+                         dist = calculate_route_distance(start_coord, end_coord, circuity_factor)
+                         sequence_parts.append(f" -> {society_name} (Blocks: {blocks}) ({dist:.2f} km)")
+                    else:
+                        sequence_parts.append(f"{society_name} (Blocks: {blocks})")
                 delivery_sequence_str = "".join(sequence_parts)
         summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str})
     return pd.DataFrame(summary_rows)
@@ -238,7 +241,7 @@ if st.session_state.get('clusters') is not None:
         st.warning("Depot settings have changed. The displayed results are for the previous location. Please click 'Generate Clusters' to update.")
     with st.container():
         all_clusters = st.session_state.clusters
-        full_summary_df = create_summary_df(all_clusters, depot_coord, circuity_factor)
+        full_summary_df = create_summary_df(all_clusters, depot_coord, circuity_factor, df_raw)  # Pass df_raw to create_summary_df
         st.header("📊 Overall Cluster Summary")
         column_order = ['Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence']
         st.dataframe(full_summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
@@ -274,7 +277,9 @@ if st.session_state.get('clusters') is not None:
                     cluster_cpo = (cluster_cost / cluster_orders) if cluster_orders > 0 else 0
                     cluster_details_df['CPO (in Rs.)'] = round(cluster_cpo, 2)
                     cluster_details_df.rename(columns={'Orders': 'Total Orders'}, inplace=True)
-                    detail_cols = ['Society ID', 'Society Name', 'Hub ID', 'Hub Name', 'Total Orders', 'CPO (in Rs.)']
+                    detail_cols = ['Society ID', 'Society Name', 'Hub ID', 'Hub Name', 'Total Orders', 'CPO (in Rs.)', 'Number of Blocks'] #Added
+                    # Include Number of Blocks in the displayed columns
+                    cluster_details_df = pd.merge(cluster_details_df, df_raw[['Society ID', 'Number of Blocks']], on='Society ID', how='left')
                     st.dataframe(cluster_details_df[detail_cols])
                     st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", cluster_details_df[detail_cols].to_csv(index=False).encode('utf-8'), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
                 with col2:
