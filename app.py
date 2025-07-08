@@ -81,7 +81,6 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
     societies_map = {s['Society ID']: s for s in df.to_dict('records')}
     unprocessed_ids = set(societies_map.keys())
     depot_coord = (depot_lat, depot_lon)
-    st.write("Costs Dictionary (inside run_clustering):", costs)  # Debug: Check costs here
     for hub_name in df['Hub Name'].unique():
         hub_society_ids = {sid for sid in unprocessed_ids if societies_map[sid]['Hub Name'] == hub_name}
         for cluster_type in ['Main', 'Mini', 'Micro']:
@@ -110,7 +109,6 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
                     # **Cost Calculation based on cluster_type**
                     cluster_type_lower = cluster_type.lower()  # Correctly convert to lowercase
                     cost = costs.get(cluster_type_lower, 0)  # Use .get() to handle missing keys gracefully
-                    st.write(f"Cluster Type: {cluster_type}, Cost: {cost}") # Check cost assignment
                     all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': cost, 'Hub Name': hub_name})  # Include the cost
                     cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
             for sid in hub_society_ids:
@@ -126,10 +124,9 @@ def create_summary_df(clusters, depot_coord, circuity_factor, df):
     society_id_to_blocks = df.set_index('Society ID')['Number of Blocks'].to_dict()
     for c in clusters:
         # **Ensure c['Cost'] exists before calculating cpo**
-        if 'Cost' in c:
-            total_orders, cpo = c['Orders'], (c['Cost'] / c['Orders']) if c['Orders'] > 0 else 0
-        else:
-            total_orders, cpo = c['Orders'], 0  # Handle cases where cost is missing.
+        # Now, calculate Total Cost *before* CPO
+        total_cost = c.get('Cost', 0) * c.get('Orders', 0)  # Calculate total cost
+        total_orders, cpo = c['Orders'], (c['Cost'] / c['Orders']) if c.get('Orders', 0) > 0 and c.get('Cost',0) >0 else 0
         id_to_name, id_to_coord = {s['Society ID']: s['Society Name'] for s in c['Societies']}, {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
         internal_distance = 0.0
         if c['Path'] and len(c['Path']) > 0:
@@ -156,9 +153,7 @@ def create_summary_df(clusters, depot_coord, circuity_factor, df):
                     else:
                         sequence_parts.append(f"{society_name} (Blocks: {blocks})")
                 delivery_sequence_str = "".join(sequence_parts)
-        # **Include Total Blocks in the summary rows**
-        total_blocks = sum(int(society_id_to_blocks.get(sid, 0)) for sid in c['Path'] if society_id_to_blocks.get(sid, 0) != 'N/A')
-        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str, 'Total Blocks': total_blocks})
+        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str, 'Total Blocks': sum(int(society_id_to_blocks.get(sid, 0)) for sid in c['Path'] if society_id_to_blocks.get(sid, 0) != 'N/A'), 'Total Cost': round(total_cost, 2)}) # ADDED Total Cost
     return pd.DataFrame(summary_rows)
 
 def create_unified_map(clusters, depot_coord, circuity_factor, use_ant_path=False):
@@ -255,7 +250,7 @@ if st.session_state.get('clusters') is not None:
         all_clusters = st.session_state.clusters
         full_summary_df = create_summary_df(all_clusters, depot_coord, circuity_factor, df_raw)  # Pass df_raw to create_summary_df
         st.header("📊 Overall Cluster Summary")
-        column_order = ['Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence', 'Total Blocks']
+        column_order = ['Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence', 'Total Blocks', 'Total Cost']  # Include total cost in column order
         # Add a check for 'Cluster ID' column before using it.
         if 'Cluster ID' in full_summary_df.columns:
             st.dataframe(full_summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
