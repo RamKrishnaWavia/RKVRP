@@ -76,7 +76,7 @@ def get_distance_to_last_society(points, depot_coord, circuity_factor):
     return round(calculate_route_distance(depot_coord, point_coords[last_society_id], circuity_factor), 2)
 
 @st.cache_data
-def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
+def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor, main_order_min, main_order_max):  # Added Order parameters
     """A robust, multi-pass, prioritized clustering algorithm using the hybrid distance approach."""
     all_clusters, cluster_id_counter = [], 1
     societies_map = {s['Society ID']: s for s in df.to_dict('records')}
@@ -91,10 +91,14 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
                 if seed_id not in hub_society_ids: continue
                 seed = societies_map[seed_id]
                 potential_cluster, potential_orders = [seed], seed['Orders']
-                if cluster_type in ['Main', 'Mini']:
-                    max_orders, proximity = (220, 2.0) if cluster_type == 'Main' else (179, 2.0)
+                if cluster_type == 'Main':
+                    # Use user-defined order range
+                    max_orders, proximity = main_order_max, 2.0
                     neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id and haversine((seed['Latitude'], seed['Longitude']), (societies_map[nid]['Latitude'], societies_map[nid]['Longitude'])) < proximity]
-                else: # Micro
+                elif cluster_type == 'Mini':
+                    max_orders, proximity = 179, 2.0
+                    neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id and haversine((seed['Latitude'], seed['Longitude']), (societies_map[nid]['Latitude'], societies_map[nid]['Longitude'])) < proximity]
+                else:  # Micro
                     max_orders = 120
                     neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id]
                 # **Sort by Orders, then Number of Blocks (ascending)**
@@ -102,7 +106,7 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor):
                     if potential_orders + neighbor['Orders'] <= max_orders:
                         potential_cluster.append(neighbor); potential_orders += neighbor['Orders']
                 valid = False
-                if cluster_type == 'Main' and 180 <= potential_orders <= 220: valid = True
+                if cluster_type == 'Main' and main_order_min <= potential_orders <= main_order_max: valid = True  # Use user-defined limits
                 elif cluster_type == 'Mini' and 121 <= potential_orders <= 179: valid = True
                 elif cluster_type == 'Micro' and 1 <= potential_orders <= 120 and get_distance_to_last_society(potential_cluster, depot_coord, circuity_factor) < 15.0: valid = True
                 if valid:
@@ -201,13 +205,14 @@ with st.sidebar:
     depot_coord = (depot_lat, depot_long)
     st.header("2. Routing & Cost Settings")
     circuity_factor = st.slider("Circuity Factor (for driving distance estimation)", 1.0, 2.0, 1.4, 0.1, help="Adjust to estimate driving distance from straight-line distance. 1.4 = 40% longer.")
-    st.subheader("Main (180 to 220) Costs")
-    main_van_cost, main_cee_cost = st.number_input("Main Van Cost (₹)", value=833, min_value=0, key="main_van"), st.number_input("Main CEE Cost (₹)", value=333, min_value=0, key="main_cee")
+    st.subheader("Main (Customizable) Costs")
+    main_order_min = st.number_input("Main Cluster - Minimum Orders", value=180, min_value=1, key="main_min")
+    main_order_max = st.number_input("Main Cluster - Maximum Orders", value=220, min_value=1, key="main_max")
     st.subheader("Mini (121 to 179) Costs")
     mini_van_cost, mini_cee_cost = st.number_input("Mini Van Cost (₹)", value=1000, min_value=0, key="mini_van"), st.number_input("Mini CEE Cost (₹)", value=200, min_value=0, key="mini_cee")
     st.subheader("Micro (1 to 120) Costs")
     micro_van_cost, micro_cee_cost = st.number_input("Micro Van Cost (₹)", value=500, min_value=0, key="micro_van"), st.number_input("Micro CEE Cost (₹)", value=200, min_value=0, key="micro_cee")
-    costs = {'main': main_van_cost + main_cee_cost, 'mini': mini_van_cost + mini_cee_cost, 'micro': micro_van_cost + micro_cee_cost}
+    costs = {'main': 0, 'mini': mini_van_cost + mini_cee_cost, 'micro': micro_van_cost + micro_cee_cost} #Main Cost not defined, should be taken care of.
     st.header("3. Upload Data")
     template_df = pd.DataFrame(columns=['Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name', 'Number of Blocks']) #Added block column
     st.download_button("Download Template CSV", template_df.to_csv(index=False).encode('utf-8'), 'input_template.csv', 'text/csv')
@@ -238,7 +243,7 @@ if 'clusters' not in st.session_state:
 
 if st.button("🚀 Generate Clusters", type="primary"):
     with st.spinner("Analyzing data and forming clusters..."):
-        st.session_state.clusters = run_clustering(df_raw, depot_lat, depot_long, costs, circuity_factor)
+        st.session_state.clusters = run_clustering(df_raw, depot_lat, depot_long, costs, circuity_factor, main_order_min, main_order_max)
         st.session_state.last_run_depot_coord = depot_coord
 
 if st.session_state.get('clusters') is not None:
