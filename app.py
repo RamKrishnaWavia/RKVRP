@@ -244,8 +244,14 @@ if st.session_state.get('clusters') is not None:
         full_summary_df = create_summary_df(all_clusters, depot_coord, circuity_factor, df_raw)  # Pass df_raw to create_summary_df
         st.header("📊 Overall Cluster Summary")
         column_order = ['Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence']
-        st.dataframe(full_summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
-        st.download_button("Download Full Summary (CSV)", full_summary_df[column_order].to_csv(index=False).encode('utf-8'), "cluster_summary.csv", "text/csv")
+        # Add a check for 'Cluster ID' column before using it.
+        if 'Cluster ID' in full_summary_df.columns:
+            st.dataframe(full_summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
+            st.download_button("Download Full Summary (CSV)", full_summary_df[column_order].to_csv(index=False).encode('utf-8'), "cluster_summary.csv", "text/csv")
+        else:
+            st.error("Error: 'Cluster ID' column not found in the summary DataFrame. Please check your data and clustering process.")
+            st.stop()
+
         st.header("📈 Overall Cumulative Summary")
         temp_df_all = full_summary_df.copy()
         # Aggregate Number of Blocks in Cumulative Summary
@@ -261,15 +267,21 @@ if st.session_state.get('clusters') is not None:
             return total_blocks
 
         temp_df_all['Total Blocks'] = temp_df_all['Delivery Sequence'].apply(extract_blocks)
-        cumulative_summary_all = temp_df_all.groupby('Cluster Type').agg(
-            Total_Routes=('Cluster ID', 'count'),
-            Total_Societies=('No. of Societies', 'sum'),
-            Total_Orders=('Total Orders', 'sum'),
-            Total_Blocks=('Total Blocks', 'sum'),  # Include Total Blocks in aggregation
-            Total_Cost=('Total Cost', 'sum')
-        ).reset_index()
-        cumulative_summary_all['Overall CPO (in Rs.)'] = (cumulative_summary_all['Total_Cost'] / cumulative_summary_all['Total_Orders']).round(2)
-        st.dataframe(cumulative_summary_all[['Cluster Type', 'Total_Routes', 'Total_Societies', 'Total_Orders', 'Total_Blocks', 'Overall CPO (in Rs.)']]) # Added the no of blocks
+        # Check if 'Cluster Type' exists before grouping
+        if 'Cluster Type' in temp_df_all.columns:
+            cumulative_summary_all = temp_df_all.groupby('Cluster Type').agg(
+                Total_Routes=('Cluster ID', 'count'),
+                Total_Societies=('No. of Societies', 'sum'),
+                Total_Orders=('Total Orders', 'sum'),
+                Total_Blocks=('Total Blocks', 'sum'),  # Include Total Blocks in aggregation
+                Total_Cost=('Total Cost', 'sum')
+            ).reset_index()
+            cumulative_summary_all['Overall CPO (in Rs.)'] = (cumulative_summary_all['Total_Cost'] / cumulative_summary_all['Total_Orders']).round(2)
+            st.dataframe(cumulative_summary_all[['Cluster Type', 'Total_Routes', 'Total_Societies', 'Total_Orders', 'Total_Blocks', 'Overall CPO (in Rs.)']]) # Added the no of blocks
+        else:
+            st.error("Error: 'Cluster Type' column not found in the summary DataFrame.  Check the clustering logic.")
+            st.stop()
+
         st.header("🗺️ Unified Map View")
         st.info("You can toggle clusters on/off using the layer control icon in the top-right of the map.")
         st_folium(create_unified_map(all_clusters, depot_coord, circuity_factor), width=1200, height=600, returned_objects=[])
