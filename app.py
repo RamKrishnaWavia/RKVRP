@@ -245,8 +245,14 @@ if st.session_state.get('clusters') is not None:
     with st.container():
         all_clusters = st.session_state.clusters
         full_summary_df = create_summary_df(all_clusters, depot_coord, circuity_factor, df_raw) #Pass df_raw to add block details
+        # Calculate total number of societies per cluster type
+        cluster_type_counts = full_summary_df.groupby('Cluster Type')['No. of Societies'].sum().reset_index()
+        cluster_type_counts.rename(columns={'No. of Societies': 'Total Societies'}, inplace=True)
+
+        # Merge cluster type counts with the summary
+        full_summary_df = pd.merge(full_summary_df, cluster_type_counts, on='Cluster Type', how='left')
         st.header("📊 Overall Cluster Summary")
-        column_order = ['Cluster ID', 'Cluster Type', 'No. of Societies', 'Total Orders', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence', 'Number of Blocks'] #Include 'Number of Blocks'
+        column_order = ['Cluster ID', 'Cluster Type', 'Total Societies', 'No. of Societies', 'Total Orders', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence', 'Number of Blocks'] #Include 'Number of Blocks' and 'Total Societies'
         st.dataframe(full_summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
         st.download_button("Download Full Summary (CSV)", full_summary_df[column_order].to_csv(index=False).encode('utf-8'), "cluster_summary.csv", "text/csv")
         st.header("📈 Overall Cumulative Summary")
