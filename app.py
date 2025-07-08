@@ -124,9 +124,10 @@ def create_summary_df(clusters, depot_coord, circuity_factor, df):
     society_id_to_blocks = df.set_index('Society ID')['Number of Blocks'].to_dict()
     for c in clusters:
         # **Ensure c['Cost'] exists before calculating cpo**
-        # Now, calculate Total Cost *before* CPO
-        total_cost = c.get('Cost', 0) * c.get('Orders', 0)  # Calculate total cost
-        total_orders, cpo = c['Orders'], (c['Cost'] / c['Orders']) if c.get('Orders', 0) > 0 and c.get('Cost',0) >0 else 0
+        if 'Cost' in c:
+            total_orders, cpo = c['Orders'], (c['Cost'] / c['Orders']) if c['Orders'] > 0 else 0
+        else:
+            total_orders, cpo = c['Orders'], 0  # Handle cases where cost is missing.
         id_to_name, id_to_coord = {s['Society ID']: s['Society Name'] for s in c['Societies']}, {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
         internal_distance = 0.0
         if c['Path'] and len(c['Path']) > 0:
@@ -153,7 +154,7 @@ def create_summary_df(clusters, depot_coord, circuity_factor, df):
                     else:
                         sequence_parts.append(f"{society_name} (Blocks: {blocks})")
                 delivery_sequence_str = "".join(sequence_parts)
-        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str, 'Total Blocks': sum(int(society_id_to_blocks.get(sid, 0)) for sid in c['Path'] if society_id_to_blocks.get(sid, 0) != 'N/A'), 'Total Cost': round(total_cost, 2)}) # ADDED Total Cost
+        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str, 'Total Blocks': sum(int(society_id_to_blocks.get(sid, 0)) for sid in c['Path'] if society_id_to_blocks.get(sid, 0) != 'N/A')})
     return pd.DataFrame(summary_rows)
 
 def create_unified_map(clusters, depot_coord, circuity_factor, use_ant_path=False):
@@ -296,8 +297,9 @@ if st.session_state.get('clusters') is not None:
                 detail_cols = ['Society ID', 'Society Name', 'Hub ID', 'Hub Name', 'Total Orders', 'CPO (in Rs.)', 'Number of Blocks'] #Added
                 # Include Number of Blocks in the displayed columns
                 cluster_details_df = pd.merge(cluster_details_df, df_raw[['Society ID', 'Number of Blocks']], on='Society ID', how='left')
-                st.dataframe(cluster_details_df[detail_cols])
-                st.download_button(f"Download Details for {selected_cluster['Cluster ID']}", cluster_details_df[detail_cols].to_csv(index=False).encode('utf-8'), f"cluster_{selected_cluster['Cluster ID']}_details.csv", "text/csv")
+                st.write("Columns after merge:", cluster_details_df.columns) # Debug: Check columns after merge
+                st.write("cluster_details_df after merge:", cluster_details_df) # Debug: Check dataframe after merge
+                st.dataframe(cluster_details_df[detail_cols]) #This is the line that's failing
             with col2:
                 st.subheader("Route Map")
                 st_folium(create_unified_map([selected_cluster], depot_coord, circuity_factor, use_ant_path=True), width=600, height=400, returned_objects=[])
