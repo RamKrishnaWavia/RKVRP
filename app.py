@@ -126,7 +126,7 @@ def create_summary_df(clusters, depot_coord, circuity_factor):
         if c['Path'] and len(c['Path']) > 0:
             total_distance = c['Distance']
             first_stop_coord = id_to_coord[c['Path'][0]]
-            last_stop_coord = id_to_coord[c['Path'][-1']]
+            last_stop_coord = id_to_coord[c['Path'][-1]]
             dist_depot_to_first = calculate_route_distance(depot_coord, first_stop_coord, circuity_factor)
             dist_last_to_depot = calculate_route_distance(last_stop_coord, depot_coord, circuity_factor)
             internal_distance = total_distance - dist_depot_to_first - dist_last_to_depot
@@ -210,16 +210,18 @@ with st.sidebar:
 if file is None:
     st.info("Please upload a society data file to begin analysis."); st.stop()
 try:
-    df_raw = pd.read_csv(file, encoding='utf-8') # First attempt
-    validation_error = validate_columns(df_raw)
-    if validation_error: st.error(validation_error); st.stop()
+    with st.spinner("Reading and validating data..."):
+        df_raw = pd.read_csv(file, encoding='utf-8') # First attempt
+        validation_error = validate_columns(df_raw)
+        if validation_error: st.error(validation_error); st.stop()
 except UnicodeDecodeError:
     st.warning("UTF-8 decoding failed. Trying a different encoding (latin-1).")
     file.seek(0)  # Reset file pointer to the beginning
     try:
-        df_raw = pd.read_csv(file, encoding='latin-1') # Fallback encoding
-        validation_error = validate_columns(df_raw)
-        if validation_error: st.error(validation_error); st.stop()
+        with st.spinner("Reading and validating data... (using latin-1 encoding)"):
+            df_raw = pd.read_csv(file, encoding='latin-1') # Fallback encoding
+            validation_error = validate_columns(df_raw)
+            if validation_error: st.error(validation_error); st.stop()
     except Exception as e:
         st.error(f"Error reading or parsing file with latin-1 encoding: {e}"); st.stop()
 except Exception as e:
