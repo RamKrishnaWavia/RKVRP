@@ -145,10 +145,12 @@ def create_summary_df(clusters, depot_coord, circuity_factor, df_raw):
                     dist = calculate_route_distance(start_coord, end_coord, circuity_factor)
                     sequence_parts.append(f" -> {end_name} ({dist:.2f} km)")
                 delivery_sequence_str = "".join(sequence_parts)
+        # Calculate total blocks for the cluster
+        total_blocks = sum(society_id_to_blocks.get(sid, 0) for sid in [s['Society ID'] for s in c['Societies']])
         # Include blocks in the summary
         society_ids_in_cluster = [s['Society ID'] for s in c['Societies']]
         blocks_str = ", ".join([str(society_id_to_blocks.get(sid, 'N/A')) for sid in society_ids_in_cluster])
-        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str, 'Number of Blocks': blocks_str})
+        summary_rows.append({'Cluster ID': c['Cluster ID'], 'Cluster Type': c['Type'], 'No. of Societies': len(c['Societies']), 'Total Orders': total_orders, 'Total Distance Fwd + Rev Leg (km)': c['Distance'], 'Distance Between the Societies (km)': round(internal_distance, 2), 'CPO (in Rs.)': round(cpo, 2), 'Delivery Sequence': delivery_sequence_str, 'Number of Blocks': blocks_str, 'Total Blocks': total_blocks})
     return pd.DataFrame(summary_rows)
 
 def create_unified_map(clusters, depot_coord, circuity_factor, use_ant_path=False):
@@ -252,15 +254,15 @@ if st.session_state.get('clusters') is not None:
         # Merge cluster type counts with the summary
         full_summary_df = pd.merge(full_summary_df, cluster_type_counts, on='Cluster Type', how='left')
         st.header("📊 Overall Cluster Summary")
-        column_order = ['Cluster ID', 'Cluster Type', 'Total Societies', 'No. of Societies', 'Total Orders', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence', 'Number of Blocks'] #Include 'Number of Blocks' and 'Total Societies'
+        column_order = ['Cluster ID', 'Cluster Type', 'Total Societies', 'No. of Societies', 'Total Orders', 'Total Blocks', 'Total Distance Fwd + Rev Leg (km)', 'Distance Between the Societies (km)', 'CPO (in Rs.)', 'Delivery Sequence', 'Number of Blocks'] #Include 'Number of Blocks' and 'Total Societies'
         st.dataframe(full_summary_df.sort_values(by=['Cluster Type', 'Cluster ID'])[column_order])
         st.download_button("Download Full Summary (CSV)", full_summary_df[column_order].to_csv(index=False).encode('utf-8'), "cluster_summary.csv", "text/csv")
         st.header("📈 Overall Cumulative Summary")
         temp_df_all = full_summary_df.copy()
         temp_df_all['Total Cost'] = temp_df_all['CPO (in Rs.)'] * temp_df_all['Total Orders']
-        cumulative_summary_all = temp_df_all.groupby('Cluster Type').agg(Total_Routes=('Cluster ID', 'count'), Total_Societies=('No. of Societies', 'sum'), Total_Orders=('Total Orders', 'sum'), Total_Cost=('Total Cost', 'sum')).reset_index()
+        cumulative_summary_all = temp_df_all.groupby('Cluster Type').agg(Total_Routes=('Cluster ID', 'count'), Total_Societies=('Total Societies', 'sum'), Total_Orders=('Total Orders', 'sum'), Total_Blocks = ('Total Blocks', 'sum'), Total_Cost=('Total Cost', 'sum')).reset_index()
         cumulative_summary_all['Overall CPO (in Rs.)'] = (cumulative_summary_all['Total_Cost'] / cumulative_summary_all['Total_Orders']).round(2)
-        st.dataframe(cumulative_summary_all[['Cluster Type', 'Total_Routes', 'Total_Societies', 'Total_Orders', 'Overall CPO (in Rs.)']])
+        st.dataframe(cumulative_summary_all[['Cluster Type', 'Total_Routes', 'Total_Societies', 'Total_Orders', 'Total_Blocks', 'Overall CPO (in Rs.)']])
         st.header("🗺️ Unified Map View")
         st.info("You can toggle clusters on/off using the layer control icon in the top-right of the map.")
         st_folium(create_unified_map(all_clusters, depot_coord, circuity_factor), width=1200, height=600, returned_objects=[])
