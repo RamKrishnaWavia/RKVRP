@@ -23,18 +23,17 @@ PREDEFINED_DEPOTS = {
 }
 
 # --- UTILITY & ALGORITHM FUNCTIONS ---
-# (These functions are correct and remain unchanged)
 
 def validate_columns(df):
     """Validate if the dataframe contains all required columns and correct data types."""
-    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name', 'Number of Blocks'} # Added block column
+    required_cols = {'Society ID', 'Society Name', 'Latitude', 'Longitude', 'Orders', 'Hub ID', 'Hub Name', 'Number of Blocks'}
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         return f"File is missing required columns: {', '.join(missing_cols)}"
-    for col in ['Latitude', 'Longitude', 'Orders', 'Hub ID', 'Number of Blocks']:  #Also validate the blocks
+    for col in ['Latitude', 'Longitude', 'Orders', 'Hub ID', 'Number of Blocks']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     if df.isnull().values.any():
-        return "File contains non-numeric or empty values in required numeric columns (Lat, Lon, Orders, Hub ID, Number of Blocks). Please check." #Update message
+        return "File contains non-numeric or empty values in required numeric columns (Lat, Lon, Orders, Hub ID, Number of Blocks). Please check."
     return None
 
 def calculate_route_distance(coord1, coord2, circuity_factor):
@@ -76,7 +75,7 @@ def get_distance_to_last_society(points, depot_coord, circuity_factor):
     return round(calculate_route_distance(depot_coord, point_coords[last_society_id], circuity_factor), 2)
 
 @st.cache_data
-def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor, main_order_min, main_order_max):  # Added Order parameters
+def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor, main_order_min, main_order_max):
     """A robust, multi-pass, prioritized clustering algorithm using the hybrid distance approach."""
     all_clusters, cluster_id_counter = [], 1
     societies_map = {s['Society ID']: s for s in df.to_dict('records')}
@@ -86,13 +85,12 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor, main_order_
         hub_society_ids = {sid for sid in unprocessed_ids if societies_map[sid]['Hub Name'] == hub_name}
         for cluster_type in ['Main', 'Mini', 'Micro']:
             # **Sort by Orders, then Number of Blocks (ascending)**
-            sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: (societies_map[sid]['Orders'], societies_map[sid]['Number of Blocks']), reverse=True) # Less blocks first - also include order for priority
+            sorted_seeds = sorted(list(hub_society_ids), key=lambda sid: (societies_map[sid]['Orders'], societies_map[sid]['Number of Blocks']), reverse=True)
             for seed_id in sorted_seeds:
                 if seed_id not in hub_society_ids: continue
                 seed = societies_map[seed_id]
                 potential_cluster, potential_orders = [seed], seed['Orders']
                 if cluster_type == 'Main':
-                    # Use user-defined order range
                     max_orders, proximity = main_order_max, 2.0
                     neighbors = [societies_map[nid] for nid in hub_society_ids if nid != seed_id and haversine((seed['Latitude'], seed['Longitude']), (societies_map[nid]['Latitude'], societies_map[nid]['Longitude'])) < proximity]
                 elif cluster_type == 'Mini':
@@ -106,12 +104,12 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor, main_order_
                     if potential_orders + neighbor['Orders'] <= max_orders:
                         potential_cluster.append(neighbor); potential_orders += neighbor['Orders']
                 valid = False
-                if cluster_type == 'Main' and main_order_min <= potential_orders <= main_order_max: valid = True  # Use user-defined limits
+                if cluster_type == 'Main' and main_order_min <= potential_orders <= main_order_max: valid = True
                 elif cluster_type == 'Mini' and 121 <= potential_orders <= 179: valid = True
                 elif cluster_type == 'Micro' and 1 <= potential_orders <= 120 and get_distance_to_last_society(potential_cluster, depot_coord, circuity_factor) < 15.0: valid = True
                 if valid:
                     path, distance = get_delivery_sequence(potential_cluster, depot_coord, circuity_factor)
-                    all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs[cluster_type.lower()], 'Hub Name': hub_name})
+                    all_clusters.append({'Cluster ID': f"{cluster_type}-{cluster_id_counter}", 'Type': cluster_type, 'Societies': potential_cluster, 'Orders': potential_orders, 'Distance': distance, 'Path': path, 'Cost': costs.get(cluster_type.lower(), 0), 'Hub Name': hub_name})
                     cluster_id_counter += 1; hub_society_ids -= {s['Society ID'] for s in potential_cluster}
         for sid in hub_society_ids:
             society = societies_map[sid]
@@ -123,7 +121,7 @@ def run_clustering(df, depot_lat, depot_lon, costs, circuity_factor, main_order_
 def create_summary_df(clusters, depot_coord, circuity_factor, df_raw):
     """Creates summary DataFrame, with the delivery sequence showing only societies."""
     summary_rows = []
-    society_id_to_blocks = df_raw.set_index('Society ID')['Number of Blocks'].to_dict() # Get blocks to add to the table.
+    society_id_to_blocks = df_raw.set_index('Society ID')['Number of Blocks'].to_dict()
     for c in clusters:
         total_orders, cpo = c['Orders'], (c['Cost'] / c['Orders']) if c['Orders'] > 0 else 0
         id_to_name, id_to_coord = {s['Society ID']: s['Society Name'] for s in c['Societies']}, {s['Society ID']: (s['Latitude'], s['Longitude']) for s in c['Societies']}
@@ -207,7 +205,7 @@ with st.sidebar:
     circuity_factor = st.slider("Circuity Factor (for driving distance estimation)", 1.0, 2.0, 1.4, 0.1, help="Adjust to estimate driving distance from straight-line distance. 1.4 = 40% longer.")
     st.subheader("Main (Customizable) Costs")
     main_order_min = st.number_input("Main Cluster - Minimum Orders", value=180, min_value=1, key="main_min")
-    main_order_max = st.number_input("Main Cluster - Maximum Orders", value=220, min_value=1, key="main_max")
+    main_order_max = st.number_input("Main Cluster - Maximum Orders", value=220, max_value=1000, key="main_max")
     st.subheader("Mini (121 to 179) Costs")
     mini_van_cost, mini_cee_cost = st.number_input("Mini Van Cost (₹)", value=1000, min_value=0, key="mini_van"), st.number_input("Mini CEE Cost (₹)", value=200, min_value=0, key="mini_cee")
     st.subheader("Micro (1 to 120) Costs")
